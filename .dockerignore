@@ -1,0 +1,67 @@
+# Dockerfile and build files
+Dockerfile
+.dockerignore
+
+# Documentation
+README.md
+SECRETS_README.md
+*.md
+CLAUDE.md
+
+# Python cache files
+*.pyc
+*.pyo
+*.pyd
+__pycache__/
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+
+# Environment and config files
+.env
+.env.local
+.env.staging
+.env.production
+
+# Development files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Git files
+.git/
+.gitignore
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+tests/
+
+# FastAPI specific
+.mypy_cache/
+
+# Logs
+*.log
+logs/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Virtual environments
+venv/
+env/
+.venv/
+
+# Database files (if any local db files)
+*.db
+*.sqlite3
+
+# Temporary files
+tmp/
+temp/
