@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query
 from sqlalchemy.orm import Session
 from typing import Dict, Any
 from pathlib import Path
@@ -20,6 +20,109 @@ def import_data_background(excel_path: str, db: Session, filter_care_homes: bool
         logger.error(f"Background import failed: {str(e)}")
 
 
+@router.post("/import-by-filename")
+def import_by_filename(
+    background_tasks: BackgroundTasks,
+    filename: str = Query(..., description="Filename in format mm_yyyy.ods (e.g., '08_2025.ods')"),
+    run_in_background: bool = Query(False, description="Run import in background"),
+    filter_care_homes: bool = Query(None, description="Filter: True=care homes only, False=non-care homes only, None=all"),
+    db: Session = Depends(get_db)
+) -> Dict[str, Any]:
+    """
+    Import CQC data by filename from Data folder.
+    
+    Args:
+        filename: Filename in format mm_yyyy.ods (e.g., "08_2025.ods")
+        run_in_background: If True, run import as background task
+        filter_care_homes: If True, import only care homes; if False, import only non-care homes; if None, import all
+        
+    Returns:
+        Import statistics and status
+        
+    Examples:
+        - filename="08_2025.ods" (imports August 2025 data)
+        - filename="01_2024.ods" (imports January 2024 data)
+    """
+    import re
+    import os
+    
+    # Parse month and year from filename
+    pattern = r'^(\d{2})_(\d{4})\.ods$'
+    match = re.match(pattern, filename)
+    
+    if not match:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Invalid filename format. Expected format: mm_yyyy.ods (e.g., 08_2025.ods). Got: {filename}"
+        )
+    
+    month = int(match.group(1))
+    year = int(match.group(2))
+    
+    # Validate month
+    if not (1 <= month <= 12):
+        raise HTTPException(status_code=400, detail=f"Month must be between 01 and 12. Got: {month:02d}")
+    
+    # Validate year
+    if year < 2000 or year > 2030:
+        raise HTTPException(status_code=400, detail=f"Year must be between 2000 and 2030. Got: {year}")
+    
+    # Construct full file path
+    data_folder = Path("Data")
+    file_path = data_folder / filename
+    
+    # Validate file exists
+    if not file_path.exists():
+        raise HTTPException(
+            status_code=404, 
+            detail=f"File not found: {file_path}. Available files: {list(data_folder.glob('*.ods')) if data_folder.exists() else 'Data folder not found'}"
+        )
+    
+    if run_in_background:
+        background_tasks.add_task(import_data_background, str(file_path), db, filter_care_homes, year, month)
+        filter_msg = ""
+        if filter_care_homes is True:
+            filter_msg = " (care homes only)"
+        elif filter_care_homes is False:
+            filter_msg = " (non-care homes only)"
+        
+        return {
+            "message": f"Data import started in background{filter_msg}",
+            "filename": filename,
+            "file_path": str(file_path),
+            "year": year,
+            "month": month,
+            "filter_care_homes": filter_care_homes,
+            "status": "running"
+        }
+    
+    # Run import synchronously
+    try:
+        importer = CQCDataImporter(db)
+        stats = importer.import_from_excel(str(file_path), filter_care_homes, year, month)
+        
+        filter_msg = ""
+        if filter_care_homes is True:
+            filter_msg = " (care homes only)"
+        elif filter_care_homes is False:
+            filter_msg = " (non-care homes only)"
+        
+        return {
+            "message": f"Data import completed{filter_msg}",
+            "filename": filename,
+            "file_path": str(file_path),
+            "year": year,
+            "month": month,
+            "filter_care_homes": filter_care_homes,
+            "status": "completed",
+            "statistics": stats
+        }
+        
+    except Exception as e:
+        logger.error(f"Import failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Import failed: {str(e)}")
+
+
 @router.post("/import-excel")
 def import_excel_data(
     background_tasks: BackgroundTasks,
@@ -31,7 +134,8 @@ def import_excel_data(
     db: Session = Depends(get_db)
 ) -> Dict[str, Any]:
     """
-    Import CQC data from Excel/ODS file to database.
+    [DEPRECATED] Import CQC data from Excel/ODS file to database.
+    Use /import-by-filename endpoint for automatic filename parsing.
     
     Args:
         year: Year of the data (e.g., 2025)
@@ -260,6 +364,76 @@ def get_data_periods(db: Session = Depends(get_db)) -> Dict[str, Any]:
         logger.error(f"Failed to get data periods: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to get data periods: {str(e)}")
 
+
+
+@router.get("/available-files")
+def list_available_files() -> Dict[str, Any]:
+    """
+    List all available data files in the Data folder.
+    
+    Returns:
+        List of available files with parsed month/year information
+    """
+    import re
+    
+    try:
+        data_folder = Path("Data")
+        
+        if not data_folder.exists():
+            return {
+                "status": "error",
+                "message": "Data folder not found",
+                "files": []
+            }
+        
+        files_info = []
+        pattern = r'^(\d{2})_(\d{4})\.ods$'
+        
+        # Get all ODS files in the Data folder
+        for file_path in data_folder.glob("*.ods"):
+            filename = file_path.name
+            match = re.match(pattern, filename)
+            
+            if match:
+                month = int(match.group(1))
+                year = int(match.group(2))
+                month_names = ["", "January", "February", "March", "April", "May", "June",
+                              "July", "August", "September", "October", "November", "December"]
+                
+                files_info.append({
+                    "filename": filename,
+                    "month": month,
+                    "year": year,
+                    "month_name": month_names[month] if 1 <= month <= 12 else "Invalid",
+                    "display_name": f"{month_names[month] if 1 <= month <= 12 else 'Invalid'} {year}",
+                    "file_size": file_path.stat().st_size,
+                    "valid_format": True
+                })
+            else:
+                files_info.append({
+                    "filename": filename,
+                    "month": None,
+                    "year": None,
+                    "month_name": None,
+                    "display_name": f"{filename} (invalid format)",
+                    "file_size": file_path.stat().st_size,
+                    "valid_format": False
+                })
+        
+        # Sort by year and month (most recent first)
+        files_info.sort(key=lambda x: (x.get('year') or 0, x.get('month') or 0), reverse=True)
+        
+        return {
+            "status": "success",
+            "data_folder": str(data_folder),
+            "total_files": len(files_info),
+            "valid_files": len([f for f in files_info if f['valid_format']]),
+            "files": files_info
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to list available files: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to list available files: {str(e)}")
 
 
 @router.get("/location-history/{location_id}")

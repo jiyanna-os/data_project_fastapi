@@ -12,6 +12,7 @@ from app.models.regulated_activity import RegulatedActivity, LocationRegulatedAc
 from app.models.service_type import ServiceType, LocationServiceType
 from app.models.service_user_band import ServiceUserBand, LocationServiceUserBand
 from app.models.data_period import DataPeriod
+from app.models.location_activity_flags import LocationActivityFlags
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +25,7 @@ class CQCDataImporter:
             "providers_created": 0,
             "locations_created": 0,
             "location_period_data_created": 0,
+            "location_activity_flags_created": 0,
             "activities_created": 0,
             "service_types_created": 0,
             "user_bands_created": 0,
@@ -42,29 +44,101 @@ class CQCDataImporter:
         return result
 
     def parse_date(self, date_str) -> Optional[datetime]:
-        """Parse date string to datetime object"""
-        if pd.isna(date_str) or not date_str:
+        """Parse date string to datetime object with comprehensive format support"""
+        if pd.isna(date_str) or date_str == '' or date_str == '-' or date_str == '*':
             return None
         
-        # Skip numeric values that aren't dates
-        if isinstance(date_str, (int, float)):
+        # Handle string values
+        if isinstance(date_str, str):
+            # Clean the string
+            date_str = date_str.strip()
+            if not date_str:
+                return None
+                
+            # Try comprehensive list of date formats commonly found in CQC data
+            date_formats = [
+                # ISO formats
+                "%Y-%m-%d %H:%M:%S",
+                "%Y-%m-%d",
+                # UK formats (DD/MM/YYYY)
+                "%d/%m/%Y",
+                "%d-%m-%Y",
+                "%d.%m.%Y",
+                # US formats (MM/DD/YYYY)
+                "%m/%d/%Y",
+                "%m-%d-%Y",
+                # Alternative formats
+                "%d %m %Y",
+                "%d %B %Y",    # 01 January 2025
+                "%d %b %Y",    # 01 Jan 2025
+                "%B %d, %Y",   # January 01, 2025
+                "%b %d, %Y",   # Jan 01, 2025
+                # Excel date formats
+                "%d/%m/%y",    # 01/01/25
+                "%m/%d/%y",    # 01/01/25
+                "%d-%m-%y",    # 01-01-25
+                "%m-%d-%y",    # 01-01-25
+                # Date with time variations
+                "%Y-%m-%d %H:%M",
+                "%d/%m/%Y %H:%M:%S",
+                "%d/%m/%Y %H:%M",
+                "%m/%d/%Y %H:%M:%S",
+                "%m/%d/%Y %H:%M",
+                # ISO 8601 variants
+                "%Y-%m-%dT%H:%M:%S",
+                "%Y-%m-%dT%H:%M:%SZ",
+                "%Y-%m-%dT%H:%M:%S.%f",
+                # Month/Year only formats (assume 1st of month)
+                "%m/%Y",       # 01/2025
+                "%Y-%m",       # 2025-01
+                "%B %Y",       # January 2025
+                "%b %Y",       # Jan 2025
+            ]
+            
+            for fmt in date_formats:
+                try:
+                    parsed_date = datetime.strptime(date_str, fmt)
+                    return parsed_date.date()
+                except ValueError:
+                    continue
+            
+            # Try pandas date parser as fallback
+            try:
+                parsed = pd.to_datetime(date_str, dayfirst=True, errors='coerce')
+                if not pd.isna(parsed):
+                    return parsed.date()
+            except:
+                pass
+                
+            # Log unrecognized date format for debugging
+            logger.warning(f"Could not parse date: '{date_str}'")
             return None
             
-        try:
-            if isinstance(date_str, str):
-                # Try different date formats
-                for fmt in ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y"]:
-                    try:
-                        return datetime.strptime(date_str, fmt).date()
-                    except:
-                        continue
+        # Handle pandas Timestamp
+        elif hasattr(date_str, 'to_pydatetime'):
+            return date_str.to_pydatetime().date()
+            
+        # Handle datetime objects
+        elif hasattr(date_str, 'date'):
+            return date_str.date()
+            
+        # Handle numeric values (Excel serial dates)
+        elif isinstance(date_str, (int, float)):
+            try:
+                # Excel epoch starts from 1900-01-01 (with 1900 leap year bug)
+                # Excel serial 1 = 1900-01-01, but we need to account for the bug
+                if date_str > 59:  # After Feb 28, 1900
+                    excel_date = datetime(1899, 12, 30) + pd.Timedelta(days=date_str)
+                else:
+                    excel_date = datetime(1899, 12, 31) + pd.Timedelta(days=date_str - 1)
+                return excel_date.date()
+            except:
+                logger.warning(f"Could not parse numeric date: {date_str}")
                 return None
-            elif hasattr(date_str, 'date'):
-                return date_str.date()
-            elif hasattr(date_str, 'to_pydatetime'):
-                return date_str.to_pydatetime().date()
-            return date_str
-        except:
+                
+        # Unknown type
+        else:
+            logger.warning(f"Unknown date type: {type(date_str)} - {date_str}")
             return None
 
     def parse_boolean(self, value) -> bool:
@@ -418,6 +492,71 @@ class CQCDataImporter:
                     )
                     self.db.add(location_band)
 
+    def create_location_activity_flags(self, location: Location, row: pd.Series, data_period: DataPeriod) -> Optional[LocationActivityFlags]:
+        """Create activity flags for a location in a specific period"""
+        # Check if flags already exist
+        existing_flags = self.db.query(LocationActivityFlags).filter(
+            LocationActivityFlags.location_id == location.location_id,
+            LocationActivityFlags.period_id == data_period.period_id
+        ).first()
+        
+        if existing_flags:
+            return existing_flags
+        
+        # Create new activity flags record
+        activity_flags = LocationActivityFlags(
+            location_id=location.location_id,
+            period_id=data_period.period_id,
+            
+            # Regulated Activities
+            accommodation_nursing_personal_care=self.parse_boolean(row.get('Regulated activity - Accommodation for persons who require nursing or personal care')),
+            treatment_disease_disorder_injury=self.parse_boolean(row.get('Regulated activity - Treatment of disease, disorder or injury')),
+            assessment_medical_treatment=self.parse_boolean(row.get('Regulated activity - Assessment or medical treatment for persons detained under the Mental Health Act 1983')),
+            surgical_procedures=self.parse_boolean(row.get('Regulated activity - Surgical procedures')),
+            diagnostic_screening=self.parse_boolean(row.get('Regulated activity - Diagnostic and screening procedures')),
+            management_supply_blood=self.parse_boolean(row.get('Regulated activity - Management of supply of blood and blood derived products')),
+            transport_services=self.parse_boolean(row.get('Regulated activity - Transport services, triage and medical advice provided remotely')),
+            maternity_midwifery=self.parse_boolean(row.get('Regulated activity - Maternity and midwifery services')),
+            termination_pregnancies=self.parse_boolean(row.get('Regulated activity - Termination of pregnancies')),
+            services_slimming=self.parse_boolean(row.get('Regulated activity - Services in slimming clinics')),
+            nursing_care=self.parse_boolean(row.get('Regulated activity - Nursing care')),
+            personal_care=self.parse_boolean(row.get('Regulated activity - Personal care')),
+            accommodation_persons_detoxification=self.parse_boolean(row.get('Regulated activity - Accommodation for persons who require treatment for substance misuse')),
+            accommodation_persons_past_present_alcohol_dependence=self.parse_boolean(row.get('Regulated activity - Treatment of disease, disorder or injury')),
+            
+            # Service Types  
+            care_home_nursing=self.parse_boolean(row.get('Service type - Care home service with nursing')),
+            care_home_without_nursing=self.parse_boolean(row.get('Service type - Care home service without nursing')),
+            domiciliary_care=self.parse_boolean(row.get('Service type - Domiciliary care service')),
+            hospital_services_acute=self.parse_boolean(row.get('Service type - Hospital services for people detained under the Mental Health Act')),
+            community_health_care=self.parse_boolean(row.get('Service type - Community healthcare service')),
+            
+            # Service User Bands
+            children_0_3_years=self.parse_boolean(row.get('Service user band - Younger adults')),
+            children_4_12_years=self.parse_boolean(row.get('Service user band - Children')),
+            children_13_18_years=self.parse_boolean(row.get('Service user band - Young People')),
+            adults_18_65_years=self.parse_boolean(row.get('Service user band - Adults 18-65')),
+            older_people_65_plus=self.parse_boolean(row.get('Service user band - Older People')),
+            dementia=self.parse_boolean(row.get('Service user band - Dementia')),
+            learning_disabilities_autistic=self.parse_boolean(row.get('Service user band - Learning disabilities or autistic spectrum disorders')),
+            mental_health_needs=self.parse_boolean(row.get('Service user band - Mental Health Needs')),
+            physical_disability=self.parse_boolean(row.get('Service user band - Physical Disability')),
+            sensory_impairment=self.parse_boolean(row.get('Service user band - Sensory Impairment')),
+        )
+        
+        try:
+            self.db.add(activity_flags)
+            self.db.commit()
+            self.stats["location_activity_flags_created"] += 1
+            return activity_flags
+        except IntegrityError as e:
+            self.db.rollback()
+            self.stats["errors"].append(f"Location activity flags {location.location_id}-{data_period.period_id}: {str(e)}")
+            return self.db.query(LocationActivityFlags).filter(
+                LocationActivityFlags.location_id == location.location_id,
+                LocationActivityFlags.period_id == data_period.period_id
+            ).first()
+
     def import_from_excel(self, excel_path: str, filter_care_homes: bool = None, year: int = None, month: int = None) -> Dict:
         """Import data from Excel file with optional filtering"""
         try:
@@ -466,7 +605,10 @@ class CQCDataImporter:
                     if not period_data:
                         continue
                     
-                    # Add activities, service types, and user bands
+                    # Create activity flags for this period
+                    activity_flags = self.create_location_activity_flags(location, row, data_period)
+                    
+                    # Add activities, service types, and user bands (for backward compatibility)
                     self.add_location_activities(location, row)
                     self.add_location_service_types(location, row)
                     self.add_location_user_bands(location, row)
