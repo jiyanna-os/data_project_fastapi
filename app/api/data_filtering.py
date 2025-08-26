@@ -71,9 +71,14 @@ AVAILABLE_COLUMNS = {
     "location_parliamentary_constituency": "l.location_parliamentary_constituency",
     "location_also_known_as": "l.location_also_known_as",
     "location_specialisms": "l.location_specialisms",
+    "location_web_address": "l.location_web_address",
+    "is_dual_registered": "l.is_dual_registered",
+    "primary_id": "l.primary_id",
+    "dual_location_id": "l.dual_location_id",
 
     # Provider information
     "companies_house_number": "p.companies_house_number",
+    "charity_number": "p.charity_number",
     "brand_id": "p.brand_id",
     "provider_id": "p.provider_id",
     "provider_name": "p.provider_name",
@@ -118,24 +123,63 @@ AVAILABLE_COLUMNS = {
     "personal_care": "laf.personal_care",
     "accommodation_persons_detoxification": "laf.accommodation_persons_detoxification",
     "accommodation_persons_past_present_alcohol_dependence": "laf.accommodation_persons_past_present_alcohol_dependence",
+    "family_planning": "laf.family_planning",
 
-    # Service Types (sampling - add more as needed)
+    # Service Types - Complete list from CQC data
+    "acute_services_with_overnight_beds": "laf.acute_services_with_overnight_beds",
+    "acute_services_without_overnight_beds": "laf.acute_services_without_overnight_beds",
+    "ambulance_service": "laf.ambulance_service",
+    "blood_and_transplant_service": "laf.blood_and_transplant_service",
     "care_home_nursing": "laf.care_home_nursing",
     "care_home_without_nursing": "laf.care_home_without_nursing",
-    "domiciliary_care": "laf.domiciliary_care",
-    "hospital_services_acute": "laf.hospital_services_acute",
+    "community_based_services_substance_misuse": "laf.community_based_services_substance_misuse",
+    "community_based_services_learning_disability": "laf.community_based_services_learning_disability", 
+    "community_based_services_mental_health": "laf.community_based_services_mental_health",
+    "community_health_care_independent_midwives": "laf.community_health_care_independent_midwives",
+    "community_health_care_nurses_agency": "laf.community_health_care_nurses_agency",
     "community_health_care": "laf.community_health_care",
+    "dental_service": "laf.dental_service",
+    "diagnostic_screening_service": "laf.diagnostic_screening_service",
+    "diagnostic_screening_single_handed_sessional": "laf.diagnostic_screening_single_handed_sessional",
+    "doctors_consultation": "laf.doctors_consultation",
+    "doctors_treatment": "laf.doctors_treatment", 
+    "domiciliary_care": "laf.domiciliary_care",
+    "extra_care_housing": "laf.extra_care_housing",
+    "hospice_services": "laf.hospice_services",
+    "hospice_services_at_home": "laf.hospice_services_at_home",
+    "hospital_services_mental_health_learning_disabilities": "laf.hospital_services_mental_health_learning_disabilities",
+    "hospital_services_acute": "laf.hospital_services_acute",
+    "hyperbaric_chamber": "laf.hyperbaric_chamber",
+    "long_term_conditions": "laf.long_term_conditions",
+    "mobile_doctors": "laf.mobile_doctors",
+    "prison_healthcare": "laf.prison_healthcare",
+    "rehabilitation_services": "laf.rehabilitation_services",
+    "remote_clinical_advice": "laf.remote_clinical_advice",
+    "residential_substance_misuse_treatment": "laf.residential_substance_misuse_treatment",
+    "shared_lives": "laf.shared_lives",
+    "specialist_college": "laf.specialist_college",
+    "supported_living": "laf.supported_living", 
+    "urgent_care": "laf.urgent_care",
 
-    # Service User Bands
+    # Service User Bands - Complete list from CQC data
+    "children_0_18_years": "laf.children_0_18_years",
+    "dementia": "laf.dementia", 
+    "learning_disabilities_autistic": "laf.learning_disabilities_autistic",
+    "mental_health_needs": "laf.mental_health_needs",
+    "older_people_65_plus": "laf.older_people_65_plus",
+    "people_detained_mental_health_act": "laf.people_detained_mental_health_act",
+    "people_who_misuse_drugs_alcohol": "laf.people_who_misuse_drugs_alcohol",
+    "people_with_eating_disorder": "laf.people_with_eating_disorder",
+    "physical_disability": "laf.physical_disability",
+    "sensory_impairment": "laf.sensory_impairment",
+    "whole_population": "laf.whole_population",
+    "younger_adults": "laf.younger_adults",
+    
+    # Legacy backward compatibility fields
     "children_0_3_years": "laf.children_0_3_years",
     "children_4_12_years": "laf.children_4_12_years",
     "children_13_18_years": "laf.children_13_18_years",
     "adults_18_65_years": "laf.adults_18_65_years",
-    "older_people_65_plus": "laf.older_people_65_plus",
-    "dementia": "laf.dementia",
-    "learning_disabilities_autistic": "laf.learning_disabilities_autistic",
-    "mental_health_needs": "laf.mental_health_needs",
-    "physical_disability": "laf.physical_disability",
 
     # Period information
     "year": "dp.year",
@@ -487,8 +531,7 @@ def filter_cqc_data(
             "filters_applied": {
                 "conditions": len(where_conditions),
                 "logic": logic
-            },
-            "fields_returned": requested_columns if fields else list(AVAILABLE_COLUMNS.keys())
+            }
         }
 
     except HTTPException:

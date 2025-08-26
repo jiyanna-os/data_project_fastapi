@@ -141,6 +141,31 @@ class CQCDataImporter:
             logger.warning(f"Unknown date type: {type(date_str)} - {date_str}")
             return None
 
+    def validate_date(self, date_value, field_name: str) -> Optional[datetime]:
+        """Validate dates for logical consistency"""
+        if not date_value:
+            return None
+            
+        try:
+            from datetime import date as date_class
+            if isinstance(date_value, date_class):
+                current_date = date_class.today()
+                
+                # Check for future publication dates (likely data error)
+                if field_name == 'publication_date' and date_value > current_date:
+                    logger.warning(f"Future publication date detected: {date_value}")
+                    # Still return the date but log the warning
+                    
+                # Check for very old dates (likely data error)
+                if date_value.year < 1900:
+                    logger.warning(f"Very old date detected for {field_name}: {date_value}")
+                    return None
+                    
+                return date_value
+        except Exception as e:
+            logger.warning(f"Date validation error for {field_name}: {str(e)}")
+            return date_value
+
     def parse_boolean(self, value) -> bool:
         """Parse Y/N values to boolean"""
         if pd.isna(value):
@@ -148,6 +173,7 @@ class CQCDataImporter:
         return str(value).upper() == 'Y'
 
     def parse_number(self, value) -> Optional[int]:
+        """Parse numeric values for integer fields"""
         """Parse numeric values"""
         if pd.isna(value) or value == '' or value == '-':
             return None
@@ -167,6 +193,45 @@ class CQCDataImporter:
         try:
             return float(value)
         except:
+            return None
+
+    def parse_telephone(self, value) -> Optional[str]:
+        """Parse telephone numbers with UK format validation"""
+        if pd.isna(value) or value == '' or value == '-':
+            return None
+        try:
+            # Convert to string and strip whitespace
+            phone = str(value).strip()
+            # Handle scientific notation from Excel
+            if 'e+' in phone.lower():
+                # Convert scientific notation to integer first, then string
+                phone = str(int(float(phone)))
+            
+            # Remove non-digit characters
+            import re
+            phone = re.sub(r'[^\d]', '', phone)
+            
+            if not phone:
+                return None
+                
+            # UK phone number validation and formatting
+            if len(phone) == 11 and phone.startswith('0'):
+                # Standard UK number: 01709789790 -> 01709789790
+                return phone
+            elif len(phone) == 10 and not phone.startswith('0'):
+                # Missing leading zero: 1709789790 -> 01709789790
+                return '0' + phone
+            elif len(phone) > 11:
+                # Too many digits - truncate from right (assuming extra digits added)
+                return phone[:11]
+            elif len(phone) < 10:
+                # Too few digits - log warning but keep
+                logger.warning(f"Short phone number: {phone}")
+                return phone
+            else:
+                return phone
+        except Exception as e:
+            logger.warning(f"Could not parse phone number: {value} - {str(e)}")
             return None
 
     def get_or_create_brand(self, brand_id: str, brand_name: str) -> Optional[Brand]:
@@ -302,15 +367,15 @@ class CQCDataImporter:
             inspection_directorate=self.clean_value(row.get('Provider Inspection Directorate')),
             primary_inspection_category=self.clean_value(row.get('Provider Primary Inspection Category')),
             ownership_type=self.clean_value(row.get('Provider Ownership Type')),
-            telephone_number=self.parse_number(row.get('Provider Telephone Number')),
+            telephone_number=self.parse_telephone(row.get('Provider Telephone Number')),
             web_address=self.clean_value(row.get('Provider Web Address')),
             street_address=self.clean_value(row.get('Provider Street Address')),
             address_line_2=self.clean_value(row.get('Provider Address Line 2')),
             city=self.clean_value(row.get('Provider City')),
             county=self.clean_value(row.get('Provider County')),
             postal_code=self.clean_value(row.get('Provider Postal Code')),
-            paf_id=self.parse_number(row.get('Provider PAF ID')),
-            uprn_id=self.parse_number(row.get('Provider UPRN ID')),
+            paf_id=self.clean_value(row.get('Provider PAF ID')),
+            uprn_id=self.clean_value(row.get('Provider UPRN ID')),
             local_authority=self.clean_value(row.get('Provider Local Authority')),
             region=self.clean_value(row.get('Provider Region')),
             nhs_region=self.clean_value(row.get('Provider NHS Region')),
@@ -350,7 +415,7 @@ class CQCDataImporter:
             location_name=self.clean_value(row.get('Location Name')) or f"Location {location_id}",
             location_hsca_start_date=self.parse_date(row.get('Location HSCA start date')),
             location_ods_code=self.clean_value(row.get('Location ODS Code')),
-            location_telephone_number=self.parse_number(row.get('Location Telephone Number')),
+            location_telephone_number=self.parse_telephone(row.get('Location Telephone Number')),
             location_web_address=self.clean_value(row.get('Location Web Address')),
             location_type_sector=self.clean_value(row.get('Location Type/Sector')),
             location_inspection_directorate=self.clean_value(row.get('Location Inspection Directorate')),
@@ -367,8 +432,8 @@ class CQCDataImporter:
             location_city=self.clean_value(row.get('Location City')),
             location_county=self.clean_value(row.get('Location County')),
             location_postal_code=self.clean_value(row.get('Location Postal Code')),
-            location_paf_id=self.parse_number(row.get('Location PAF ID')),
-            location_uprn_id=self.parse_number(row.get('Location UPRN ID')),
+            location_paf_id=self.clean_value(row.get('Location PAF ID')),
+            location_uprn_id=self.clean_value(row.get('Location UPRN ID')),
             location_latitude=self.parse_decimal(row.get('Location Latitude')),
             location_longitude=self.parse_decimal(row.get('Location Longitude')),
             location_parliamentary_constituency=self.clean_value(row.get('Location Parliamentary Constituency')),
@@ -409,7 +474,7 @@ class CQCDataImporter:
             registered_manager=self.clean_value(row.get('Registered manager')),
             care_homes_beds=self.parse_number(row.get('Care homes beds')),
             latest_overall_rating=self.clean_value(row.get('Location Latest Overall Rating')),
-            publication_date=self.parse_date(row.get('Publication Date')),
+            publication_date=self.validate_date(self.parse_date(row.get('Publication Date')), 'publication_date'),
             is_inherited_rating=self.parse_boolean(row.get('Inherited Rating (Y/N)'))
         )
         
@@ -508,7 +573,7 @@ class CQCDataImporter:
             location_id=location.location_id,
             period_id=data_period.period_id,
             
-            # Regulated Activities
+            # Regulated Activities - Complete mapping
             accommodation_nursing_personal_care=self.parse_boolean(row.get('Regulated activity - Accommodation for persons who require nursing or personal care')),
             treatment_disease_disorder_injury=self.parse_boolean(row.get('Regulated activity - Treatment of disease, disorder or injury')),
             assessment_medical_treatment=self.parse_boolean(row.get('Regulated activity - Assessment or medical treatment for persons detained under the Mental Health Act 1983')),
@@ -522,26 +587,63 @@ class CQCDataImporter:
             nursing_care=self.parse_boolean(row.get('Regulated activity - Nursing care')),
             personal_care=self.parse_boolean(row.get('Regulated activity - Personal care')),
             accommodation_persons_detoxification=self.parse_boolean(row.get('Regulated activity - Accommodation for persons who require treatment for substance misuse')),
-            accommodation_persons_past_present_alcohol_dependence=self.parse_boolean(row.get('Regulated activity - Treatment of disease, disorder or injury')),
+            family_planning=self.parse_boolean(row.get('Regulated activity - Family planning')),
             
-            # Service Types  
+            # Service Types - Complete mapping from CQC data
+            acute_services_with_overnight_beds=self.parse_boolean(row.get('Service type - Acute services with overnight beds')),
+            acute_services_without_overnight_beds=self.parse_boolean(row.get('Service type - Acute services without overnight beds / listed acute services with or without overnight beds')),
+            ambulance_service=self.parse_boolean(row.get('Service type - Ambulance service')),
+            blood_and_transplant_service=self.parse_boolean(row.get('Service type - Blood and Transplant service')),
             care_home_nursing=self.parse_boolean(row.get('Service type - Care home service with nursing')),
             care_home_without_nursing=self.parse_boolean(row.get('Service type - Care home service without nursing')),
-            domiciliary_care=self.parse_boolean(row.get('Service type - Domiciliary care service')),
-            hospital_services_acute=self.parse_boolean(row.get('Service type - Hospital services for people detained under the Mental Health Act')),
+            community_based_services_substance_misuse=self.parse_boolean(row.get('Service type - Community based services for people who misuse substances')),
+            community_based_services_learning_disability=self.parse_boolean(row.get('Service type - Community based services for people with a learning disability')),
+            community_based_services_mental_health=self.parse_boolean(row.get('Service type - Community based services for people with mental health needs')),
+            community_health_care_independent_midwives=self.parse_boolean(row.get('Service type - Community health care services - Independent Midwives')),
+            community_health_care_nurses_agency=self.parse_boolean(row.get('Service type - Community health care services - Nurses Agency only')),
             community_health_care=self.parse_boolean(row.get('Service type - Community healthcare service')),
+            dental_service=self.parse_boolean(row.get('Service type - Dental service')),
+            diagnostic_screening_service=self.parse_boolean(row.get('Service type - Diagnostic and/or screening service')),
+            diagnostic_screening_single_handed_sessional=self.parse_boolean(row.get('Service type - Diagnostic and/or screening service - single handed sessional providers')),
+            doctors_consultation=self.parse_boolean(row.get('Service type - Doctors consultation service')),
+            doctors_treatment=self.parse_boolean(row.get('Service type - Doctors treatment service')),
+            domiciliary_care=self.parse_boolean(row.get('Service type - Domiciliary care service')),
+            extra_care_housing=self.parse_boolean(row.get('Service type - Extra Care housing services')),
+            hospice_services=self.parse_boolean(row.get('Service type - Hospice services')),
+            hospice_services_at_home=self.parse_boolean(row.get('Service type - Hospice services at home')),
+            hospital_services_mental_health_learning_disabilities=self.parse_boolean(row.get('Service type - Hospital services for people with mental health needs, learning disabilities and problems with substance misuse')),
+            hospital_services_acute=self.parse_boolean(row.get('Service type - Hospital services for people detained under the Mental Health Act')),
+            hyperbaric_chamber=self.parse_boolean(row.get('Service type - Hyperbaric Chamber')),
+            long_term_conditions=self.parse_boolean(row.get('Service type - Long term conditions services')),
+            mobile_doctors=self.parse_boolean(row.get('Service type - Mobile doctors service')),
+            prison_healthcare=self.parse_boolean(row.get('Service type - Prison Healthcare Services')),
+            rehabilitation_services=self.parse_boolean(row.get('Service type - Rehabilitation services')),
+            remote_clinical_advice=self.parse_boolean(row.get('Service type - Remote clinical advice service')),
+            residential_substance_misuse_treatment=self.parse_boolean(row.get('Service type - Residential substance misuse treatment and/or rehabilitation service')),
+            shared_lives=self.parse_boolean(row.get('Service type - Shared Lives')),
+            specialist_college=self.parse_boolean(row.get('Service type - Specialist college service')),
+            supported_living=self.parse_boolean(row.get('Service type - Supported living service')),
+            urgent_care=self.parse_boolean(row.get('Service type - Urgent care services')),
             
-            # Service User Bands
-            children_0_3_years=self.parse_boolean(row.get('Service user band - Younger adults')),
-            children_4_12_years=self.parse_boolean(row.get('Service user band - Children')),
-            children_13_18_years=self.parse_boolean(row.get('Service user band - Young People')),
-            adults_18_65_years=self.parse_boolean(row.get('Service user band - Adults 18-65')),
-            older_people_65_plus=self.parse_boolean(row.get('Service user band - Older People')),
+            # Service User Bands - Complete mapping from CQC data
+            children_0_18_years=self.parse_boolean(row.get('Service user band - Children 0-18 years')),
             dementia=self.parse_boolean(row.get('Service user band - Dementia')),
-            learning_disabilities_autistic=self.parse_boolean(row.get('Service user band - Learning disabilities or autistic spectrum disorders')),
-            mental_health_needs=self.parse_boolean(row.get('Service user band - Mental Health Needs')),
+            learning_disabilities_autistic=self.parse_boolean(row.get('Service user band - Learning disabilities or autistic spectrum disorder')),
+            mental_health_needs=self.parse_boolean(row.get('Service user band - Mental Health')),
+            older_people_65_plus=self.parse_boolean(row.get('Service user band - Older People')),
+            people_detained_mental_health_act=self.parse_boolean(row.get('Service user band - People detained under the Mental Health Act')),
+            people_who_misuse_drugs_alcohol=self.parse_boolean(row.get('Service user band - People who misuse drugs and alcohol')),
+            people_with_eating_disorder=self.parse_boolean(row.get('Service user band - People with an eating disorder')),
             physical_disability=self.parse_boolean(row.get('Service user band - Physical Disability')),
             sensory_impairment=self.parse_boolean(row.get('Service user band - Sensory Impairment')),
+            whole_population=self.parse_boolean(row.get('Service user band - Whole Population')),
+            younger_adults=self.parse_boolean(row.get('Service user band - Younger Adults')),
+            
+            # Legacy backward compatibility fields
+            children_0_3_years=False,  # Map to children_0_18_years for compatibility
+            children_4_12_years=False,  # Map to children_0_18_years for compatibility  
+            children_13_18_years=False,  # Map to children_0_18_years for compatibility
+            adults_18_65_years=self.parse_boolean(row.get('Service user band - Younger Adults')),  # Map to younger_adults
         )
         
         try:
@@ -626,6 +728,13 @@ class CQCDataImporter:
                     logger.error(error_msg)
                     continue
             
+            # Process dual registrations if third sheet exists
+            try:
+                self.process_dual_registrations(excel_path, data_period)
+            except Exception as e:
+                logger.warning(f"Dual registration processing failed (sheet may not exist): {str(e)}")
+                self.stats["errors"].append(f"Dual registration warning: {str(e)}")
+            
             logger.info("Import completed successfully")
             return self.stats
             
@@ -633,3 +742,121 @@ class CQCDataImporter:
             logger.error(f"Import failed: {str(e)}")
             self.stats["errors"].append(f"Import failed: {str(e)}")
             return self.stats
+
+    def process_dual_registrations(self, excel_path: str, data_period: DataPeriod):
+        """Process dual registrations from third sheet"""
+        try:
+            # Try to load the third sheet (typically sheet index 2)
+            excel_file = pd.ExcelFile(excel_path, engine='odf')
+            sheet_names = excel_file.sheet_names
+            
+            logger.info(f"Found {len(sheet_names)} sheets: {sheet_names}")
+            
+            if len(sheet_names) < 3:
+                logger.info("No third sheet found - skipping dual registration processing")
+                return
+            
+            # Load the third sheet with minimal rows first to check structure
+            third_sheet_name = sheet_names[2]
+            logger.info(f"Processing dual registrations from sheet: '{third_sheet_name}'")
+            
+            # Load a sample first to understand structure
+            try:
+                df_sample = pd.read_excel(excel_path, engine='odf', sheet_name=third_sheet_name, nrows=3)
+                logger.info(f"Third sheet columns: {list(df_sample.columns)}")
+                logger.info(f"Sample shape: {df_sample.shape}")
+                
+                # Check if there's any data
+                if df_sample.empty:
+                    logger.info("Third sheet is empty - skipping dual registration processing")
+                    return
+                    
+            except Exception as e:
+                logger.warning(f"Could not read third sheet sample: {str(e)}")
+                return
+            
+            # Now load the full third sheet
+            df_dual = pd.read_excel(excel_path, engine='odf', sheet_name=third_sheet_name)
+            logger.info(f"Loaded {len(df_dual)} rows from dual registration sheet")
+            
+            # Remove completely empty rows
+            df_dual = df_dual.dropna(how='all')
+            logger.info(f"After removing empty rows: {len(df_dual)} rows")
+            
+            if df_dual.empty:
+                logger.info("No data found in third sheet after cleanup")
+                return
+            
+            # Process each row in the dual registration sheet
+            dual_pairs_processed = 0
+            for index, row in df_dual.iterrows():
+                try:
+                    # Extract the specific dual registration identifiers
+                    # Based on the actual column structure provided
+                    location_id = self.clean_value(row.get('Location ID'))
+                    linked_organisation_id = self.clean_value(row.get('Linked Organisation ID'))
+                    primary_id = self.clean_value(row.get('Primary ID'))
+                    
+                    logger.debug(f"Row {index}: Location ID='{location_id}', Linked Org ID='{linked_organisation_id}', Primary ID='{primary_id}'")
+                    
+                    # We need both Location ID and Linked Organisation ID for dual registration
+                    if not location_id or not linked_organisation_id:
+                        logger.debug(f"Row {index}: Missing required IDs - Location ID: {location_id}, Linked Org ID: {linked_organisation_id}")
+                        continue
+                    
+                    # Skip if they're the same (not a dual registration)
+                    if location_id == linked_organisation_id:
+                        logger.debug(f"Row {index}: Location ID and Linked Org ID are the same, skipping")
+                        continue
+                    
+                    # Find both locations in the database
+                    location1 = self.db.query(Location).join(LocationPeriodData).filter(
+                        LocationPeriodData.period_id == data_period.period_id,
+                        Location.location_id == location_id
+                    ).first()
+                    
+                    location2 = self.db.query(Location).join(LocationPeriodData).filter(
+                        LocationPeriodData.period_id == data_period.period_id,
+                        Location.location_id == linked_organisation_id
+                    ).first()
+                    
+                    if location1 and location2:
+                        # Set dual registration links (bidirectional)
+                        location1.dual_location_id = location2.location_id
+                        location2.dual_location_id = location1.location_id
+                        
+                        # Set the dual registration flag
+                        location1.is_dual_registered = True
+                        location2.is_dual_registered = True
+                        
+                        # Also set primary_id if provided
+                        if primary_id:
+                            if primary_id == location_id:
+                                location1.primary_id = location1.location_id
+                                location2.primary_id = location1.location_id
+                            elif primary_id == linked_organisation_id:
+                                location1.primary_id = location2.location_id
+                                location2.primary_id = location2.location_id
+                        
+                        self.db.commit()
+                        dual_pairs_processed += 1
+                        
+                        relationship = self.clean_value(row.get('Relationship', 'dual registration'))
+                        logger.info(f"✓ Linked dual registrations ({relationship}): '{location1.location_name}' ({location1.location_id}) <-> '{location2.location_name}' ({location2.location_id})")
+                    else:
+                        if not location1:
+                            logger.debug(f"Could not find location with ID: {location_id}")
+                        if not location2:
+                            logger.debug(f"Could not find location with ID: {linked_organisation_id}")
+                        
+                except Exception as e:
+                    logger.warning(f"Failed to process dual registration row {index}: {str(e)}")
+                    continue
+            
+            logger.info(f"✓ Processed {dual_pairs_processed} dual registration pairs from {len(df_dual)} rows")
+            self.stats["dual_registrations_processed"] = dual_pairs_processed
+            
+        except Exception as e:
+            logger.error(f"Failed to process dual registrations: {str(e)}")
+            # Don't raise the exception, just log it so the main import continues
+            self.stats["dual_registrations_processed"] = 0

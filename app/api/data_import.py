@@ -328,6 +328,7 @@ def recreate_tables(
         raise HTTPException(status_code=500, detail=f"Failed to recreate tables: {str(e)}")
 
 
+
 @router.get("/data-periods")
 def get_data_periods(db: Session = Depends(get_db)) -> Dict[str, Any]:
     """Get all data periods with location counts"""

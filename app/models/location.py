@@ -14,7 +14,7 @@ class Location(Base):
     # Location static information
     location_hsca_start_date = Column(Date)
     location_ods_code = Column(String(10))
-    location_telephone_number = Column(BigInteger)
+    location_telephone_number = Column(String(20))
     location_web_address = Column(String(255))
     location_type_sector = Column(String(50))
     location_inspection_directorate = Column(String(100))
@@ -33,17 +33,19 @@ class Location(Base):
     location_city = Column(String(100))
     location_county = Column(String(100))
     location_postal_code = Column(String(10))
-    location_paf_id = Column(BigInteger)
-    location_uprn_id = Column(BigInteger)
-    location_latitude = Column(DECIMAL(10, 7))
-    location_longitude = Column(DECIMAL(10, 7))
+    location_paf_id = Column(String(20))
+    location_uprn_id = Column(String(20))
+    location_latitude = Column(DECIMAL(9, 6))
+    location_longitude = Column(DECIMAL(9, 6))
     location_parliamentary_constituency = Column(String(150))
     
     # Location additional fields
     location_also_known_as = Column(String(255))
     location_specialisms = Column(String(500))
+    location_web_address = Column(String(255))
     is_dual_registered = Column(Boolean, default=False)
     primary_id = Column(String(20))
+    dual_location_id = Column(String(20))
 
     # Relationships
     provider = relationship("Provider", back_populates="locations")
