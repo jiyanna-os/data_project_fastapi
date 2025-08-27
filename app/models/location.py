@@ -42,10 +42,6 @@ class Location(Base):
     # Location additional fields
     location_also_known_as = Column(String(255))
     location_specialisms = Column(String(500))
-    location_web_address = Column(String(255))
-    is_dual_registered = Column(Boolean, default=False)
-    primary_id = Column(String(20))
-    dual_location_id = Column(String(20))
 
     # Relationships
     provider = relationship("Provider", back_populates="locations")
@@ -54,3 +50,7 @@ class Location(Base):
     service_types = relationship("LocationServiceType", back_populates="location")
     service_user_bands = relationship("LocationServiceUserBand", back_populates="location")
     snapshot_data = relationship("LocationSnapshotData", back_populates="location")
+    
+    # Dual registration relationships
+    dual_registrations_as_location = relationship("DualRegistration", foreign_keys="DualRegistration.location_id", back_populates="location")
+    dual_registrations_as_linked_org = relationship("DualRegistration", foreign_keys="DualRegistration.linked_organisation_id", back_populates="linked_organisation")

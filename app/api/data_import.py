@@ -23,7 +23,7 @@ def import_data_background(excel_path: str, db: Session, filter_care_homes: bool
 @router.post("/import-by-filename")
 def import_by_filename(
     background_tasks: BackgroundTasks,
-    filename: str = Query(..., description="Filename in format mm_yyyy.ods (e.g., '08_2025.ods')"),
+    filename: str = Query(..., description="Filename in format mm_yyyy.ods or mm_yyyy.xlsx (e.g., '08_2025.ods', '06_2025.xlsx')"),
     run_in_background: bool = Query(False, description="Run import in background"),
     filter_care_homes: bool = Query(None, description="Filter: True=care homes only, False=non-care homes only, None=all"),
     db: Session = Depends(get_db)
@@ -32,7 +32,7 @@ def import_by_filename(
     Import CQC data by filename from Data folder.
     
     Args:
-        filename: Filename in format mm_yyyy.ods (e.g., "08_2025.ods")
+        filename: Filename in format mm_yyyy.ods or mm_yyyy.xlsx (e.g., "08_2025.ods", "06_2025.xlsx")
         run_in_background: If True, run import as background task
         filter_care_homes: If True, import only care homes; if False, import only non-care homes; if None, import all
         
@@ -41,19 +41,20 @@ def import_by_filename(
         
     Examples:
         - filename="08_2025.ods" (imports August 2025 data)
+        - filename="06_2025.xlsx" (imports June 2025 data)
         - filename="01_2024.ods" (imports January 2024 data)
     """
     import re
     import os
     
-    # Parse month and year from filename
-    pattern = r'^(\d{2})_(\d{4})\.ods$'
+    # Parse month and year from filename (support both .ods and .xlsx)
+    pattern = r'^(\d{2})_(\d{4})\.(ods|xlsx)$'
     match = re.match(pattern, filename)
     
     if not match:
         raise HTTPException(
             status_code=400, 
-            detail=f"Invalid filename format. Expected format: mm_yyyy.ods (e.g., 08_2025.ods). Got: {filename}"
+            detail=f"Invalid filename format. Expected format: mm_yyyy.ods or mm_yyyy.xlsx (e.g., 08_2025.ods, 06_2025.xlsx). Got: {filename}"
         )
     
     month = int(match.group(1))
@@ -73,9 +74,12 @@ def import_by_filename(
     
     # Validate file exists
     if not file_path.exists():
+        available_files = []
+        if data_folder.exists():
+            available_files = list(data_folder.glob('*.ods')) + list(data_folder.glob('*.xlsx'))
         raise HTTPException(
             status_code=404, 
-            detail=f"File not found: {file_path}. Available files: {list(data_folder.glob('*.ods')) if data_folder.exists() else 'Data folder not found'}"
+            detail=f"File not found: {file_path}. Available files: {available_files if available_files else 'Data folder not found'}"
         )
     
     if run_in_background:
@@ -388,10 +392,10 @@ def list_available_files() -> Dict[str, Any]:
             }
         
         files_info = []
-        pattern = r'^(\d{2})_(\d{4})\.ods$'
+        pattern = r'^(\d{2})_(\d{4})\.(ods|xlsx)$'
         
-        # Get all ODS files in the Data folder
-        for file_path in data_folder.glob("*.ods"):
+        # Get all ODS and XLSX files in the Data folder
+        for file_path in list(data_folder.glob("*.ods")) + list(data_folder.glob("*.xlsx")):
             filename = file_path.name
             match = re.match(pattern, filename)
             

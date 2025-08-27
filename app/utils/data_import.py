@@ -13,6 +13,7 @@ from app.models.service_type import ServiceType, LocationServiceType
 from app.models.service_user_band import ServiceUserBand, LocationServiceUserBand
 from app.models.data_period import DataPeriod
 from app.models.location_activity_flags import LocationActivityFlags
+from app.models.dual_registration import DualRegistration
 
 logger = logging.getLogger(__name__)
 
@@ -438,9 +439,7 @@ class CQCDataImporter:
             location_longitude=self.parse_decimal(row.get('Location Longitude')),
             location_parliamentary_constituency=self.clean_value(row.get('Location Parliamentary Constituency')),
             location_also_known_as=self.clean_value(row.get('Location Also Known As')),
-            location_specialisms=self.clean_value(row.get('Location Specialisms')),
-            is_dual_registered=self.parse_boolean(row.get('Location Dual Registered')),
-            primary_id=self.clean_value(row.get('Primary ID (Dual registration locations)'))
+            location_specialisms=self.clean_value(row.get('Location Specialisms'))
         )
 
         try:
@@ -791,13 +790,14 @@ class CQCDataImporter:
             dual_pairs_processed = 0
             for index, row in df_dual.iterrows():
                 try:
-                    # Extract the specific dual registration identifiers
-                    # Based on the actual column structure provided
+                    # Extract dual registration data from the sheet
                     location_id = self.clean_value(row.get('Location ID'))
                     linked_organisation_id = self.clean_value(row.get('Linked Organisation ID'))
+                    relationship_type = self.clean_value(row.get('Relationship'))
+                    relationship_start_date = self.parse_date(row.get('Relationship Start Date'))
                     primary_id = self.clean_value(row.get('Primary ID'))
                     
-                    logger.debug(f"Row {index}: Location ID='{location_id}', Linked Org ID='{linked_organisation_id}', Primary ID='{primary_id}'")
+                    logger.debug(f"Row {index}: Location ID='{location_id}', Linked Org ID='{linked_organisation_id}', Relationship='{relationship_type}'")
                     
                     # We need both Location ID and Linked Organisation ID for dual registration
                     if not location_id or not linked_organisation_id:
@@ -809,40 +809,60 @@ class CQCDataImporter:
                         logger.debug(f"Row {index}: Location ID and Linked Org ID are the same, skipping")
                         continue
                     
-                    # Find both locations in the database
-                    location1 = self.db.query(Location).join(LocationPeriodData).filter(
-                        LocationPeriodData.period_id == data_period.period_id,
-                        Location.location_id == location_id
-                    ).first()
-                    
-                    location2 = self.db.query(Location).join(LocationPeriodData).filter(
-                        LocationPeriodData.period_id == data_period.period_id,
-                        Location.location_id == linked_organisation_id
-                    ).first()
+                    # Verify both locations exist
+                    location1 = self.db.query(Location).filter(Location.location_id == location_id).first()
+                    location2 = self.db.query(Location).filter(Location.location_id == linked_organisation_id).first()
                     
                     if location1 and location2:
-                        # Set dual registration links (bidirectional)
-                        location1.dual_location_id = location2.location_id
-                        location2.dual_location_id = location1.location_id
+                        # Determine which is primary (if specified)
+                        is_location_primary = primary_id == location_id if primary_id else False
+                        is_linked_primary = primary_id == linked_organisation_id if primary_id else False
                         
-                        # Set the dual registration flag
-                        location1.is_dual_registered = True
-                        location2.is_dual_registered = True
+                        # Create dual registration records (bidirectional)
+                        dual_reg_1 = DualRegistration(
+                            location_id=location_id,
+                            linked_organisation_id=linked_organisation_id,
+                            year=data_period.year,
+                            month=data_period.month,
+                            relationship_type=relationship_type,
+                            relationship_start_date=relationship_start_date,
+                            is_primary=is_location_primary
+                        )
                         
-                        # Also set primary_id if provided
-                        if primary_id:
-                            if primary_id == location_id:
-                                location1.primary_id = location1.location_id
-                                location2.primary_id = location1.location_id
-                            elif primary_id == linked_organisation_id:
-                                location1.primary_id = location2.location_id
-                                location2.primary_id = location2.location_id
+                        dual_reg_2 = DualRegistration(
+                            location_id=linked_organisation_id,
+                            linked_organisation_id=location_id,
+                            year=data_period.year,
+                            month=data_period.month,
+                            relationship_type=relationship_type,
+                            relationship_start_date=relationship_start_date,
+                            is_primary=is_linked_primary
+                        )
                         
+                        # Check if these dual registrations already exist for this period
+                        existing_1 = self.db.query(DualRegistration).filter(
+                            DualRegistration.location_id == location_id,
+                            DualRegistration.linked_organisation_id == linked_organisation_id,
+                            DualRegistration.year == data_period.year,
+                            DualRegistration.month == data_period.month
+                        ).first()
+                        
+                        existing_2 = self.db.query(DualRegistration).filter(
+                            DualRegistration.location_id == linked_organisation_id,
+                            DualRegistration.linked_organisation_id == location_id,
+                            DualRegistration.year == data_period.year,
+                            DualRegistration.month == data_period.month
+                        ).first()
+                        
+                        if not existing_1:
+                            self.db.add(dual_reg_1)
+                        if not existing_2:
+                            self.db.add(dual_reg_2)
+                            
                         self.db.commit()
                         dual_pairs_processed += 1
                         
-                        relationship = self.clean_value(row.get('Relationship', 'dual registration'))
-                        logger.info(f"✓ Linked dual registrations ({relationship}): '{location1.location_name}' ({location1.location_id}) <-> '{location2.location_name}' ({location2.location_id})")
+                        logger.info(f"✓ Created dual registrations ({relationship_type}): '{location1.location_name}' ({location1.location_id}) <-> '{location2.location_name}' ({location2.location_id}) for {data_period.year}-{data_period.month:02d}")
                     else:
                         if not location1:
                             logger.debug(f"Could not find location with ID: {location_id}")
