@@ -72,9 +72,6 @@ AVAILABLE_COLUMNS = {
     "location_also_known_as": "l.location_also_known_as",
     "location_specialisms": "l.location_specialisms",
     "location_web_address": "l.location_web_address",
-    "is_dual_registered": "l.is_dual_registered",
-    "primary_id": "l.primary_id",
-    "dual_location_id": "l.dual_location_id",
 
     # Provider information
     "companies_house_number": "p.companies_house_number",
@@ -184,7 +181,14 @@ AVAILABLE_COLUMNS = {
     # Period information
     "year": "dp.year",
     "month": "dp.month",
-    "file_name": "dp.file_name"
+    "file_name": "dp.file_name",
+
+    # Dual registration information
+    "is_dual_registered": "CASE WHEN dr.location_id IS NOT NULL THEN true ELSE false END",
+    "dual_linked_organisation_id": "dr.linked_organisation_id",
+    "dual_relationship_type": "dr.relationship_type",
+    "dual_relationship_start_date": "dr.relationship_start_date",
+    "is_primary_in_dual": "dr.is_primary"
 }
 
 
@@ -488,6 +492,7 @@ def filter_cqc_data(
             LEFT JOIN providers p ON l.provider_id = p.provider_id
             LEFT JOIN brands b ON p.brand_id = b.brand_id
             LEFT JOIN location_activity_flags laf ON l.location_id = laf.location_id AND lpd.period_id = laf.period_id
+            LEFT JOIN dual_registrations dr ON l.location_id = dr.location_id AND dp.year = dr.year AND dp.month = dr.month
             WHERE {where_clause}
             {order_clause}
             LIMIT :limit OFFSET :offset
@@ -509,6 +514,7 @@ def filter_cqc_data(
             LEFT JOIN providers p ON l.provider_id = p.provider_id
             LEFT JOIN brands b ON p.brand_id = b.brand_id
             LEFT JOIN location_activity_flags laf ON l.location_id = laf.location_id AND lpd.period_id = laf.period_id
+            LEFT JOIN dual_registrations dr ON l.location_id = dr.location_id AND dp.year = dr.year AND dp.month = dr.month
             WHERE {where_clause}
         """)
 
@@ -562,7 +568,9 @@ def get_available_columns() -> Dict[str, List[str]]:
                 "mental_health_needs", "physical_disability", "children_0_3_years",
                 "children_4_12_years", "children_13_18_years", "adults_18_65_years"
             ]],
-            "general": ["year", "month", "file_name", "brand_name", "is_dormant", "is_care_home"]
+            "general": ["year", "month", "file_name", "brand_name", "is_dormant", "is_care_home", 
+                       "is_dual_registered", "dual_linked_organisation_id", "dual_relationship_type", 
+                       "dual_relationship_start_date", "is_primary_in_dual"]
         }
     }
 

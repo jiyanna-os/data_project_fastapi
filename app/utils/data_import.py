@@ -2,6 +2,7 @@ import pandas as pd
 import logging
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
+from pathlib import Path
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from app.models.brand import Brand
@@ -171,7 +172,8 @@ class CQCDataImporter:
         """Parse Y/N values to boolean"""
         if pd.isna(value):
             return False
-        return str(value).upper() == 'Y'
+        str_value = str(value).upper().strip()
+        return str_value == 'Y' or str_value == 'DUAL REGISTRATION'
 
     def parse_number(self, value) -> Optional[int]:
         """Parse numeric values for integer fields"""
@@ -814,9 +816,10 @@ class CQCDataImporter:
                     location2 = self.db.query(Location).filter(Location.location_id == linked_organisation_id).first()
                     
                     if location1 and location2:
-                        # Determine which is primary (if specified)
-                        is_location_primary = primary_id == location_id if primary_id else False
-                        is_linked_primary = primary_id == linked_organisation_id if primary_id else False
+                        # Determine which is primary (Primary ID field indicates if the current location is primary)
+                        is_location_primary = self.parse_boolean(primary_id)
+                        # For the linked location, the primary status is the opposite
+                        is_linked_primary = not is_location_primary
                         
                         # Create dual registration records (bidirectional)
                         dual_reg_1 = DualRegistration(
@@ -880,3 +883,285 @@ class CQCDataImporter:
             logger.error(f"Failed to process dual registrations: {str(e)}")
             # Don't raise the exception, just log it so the main import continues
             self.stats["dual_registrations_processed"] = 0
+
+    def import_from_parquet(self, main_parquet_path: str, dual_parquet_path: str, filter_care_homes: bool = None, year: int = None, month: int = None) -> Dict:
+        """
+        Optimized import from Parquet files with dual registration lookup
+        
+        Args:
+            main_parquet_path: Path to main data Parquet file
+            dual_parquet_path: Path to dual registration Parquet file
+            filter_care_homes: Filter for care homes
+            year: Data year
+            month: Data month
+            
+        Returns:
+            Import statistics
+        """
+        try:
+            import time
+            start_time = time.time()
+            
+            logger.info(f"🚀 Starting optimized Parquet import: {main_parquet_path}")
+            logger.info(f"📊 Target period: {year}-{month:02d}")
+            
+            # Validate year and month parameters
+            if year is None or month is None:
+                raise ValueError("Both year and month parameters are required")
+            
+            if not (1 <= month <= 12):
+                raise ValueError("Month must be between 1 and 12")
+                
+            # Create or get data period
+            file_name = Path(main_parquet_path).name
+            data_period = self.get_or_create_data_period(year, month, file_name)
+            logger.info(f"✅ Data period established: {year}-{month:02d} (ID: {data_period.period_id})")
+            
+            # Load main data Parquet file
+            logger.info("📖 Step 1: Loading main data from Parquet file...")
+            main_file_size = Path(main_parquet_path).stat().st_size / (1024 * 1024)
+            logger.info(f"📁 Main Parquet file size: {main_file_size:.1f} MB")
+            
+            df_main = pd.read_parquet(main_parquet_path)
+            logger.info(f"✅ Loaded {len(df_main)} records from main Parquet file")
+            logger.info(f"📋 Columns available: {len(df_main.columns)} columns")
+            
+            # Load dual registration Parquet file and create lookup
+            logger.info("🔗 Step 2: Loading dual registration data from Parquet file...")
+            dual_file_size = Path(dual_parquet_path).stat().st_size / 1024
+            logger.info(f"📁 Dual registration Parquet file size: {dual_file_size:.1f} KB")
+            
+            df_dual = pd.read_parquet(dual_parquet_path)
+            logger.info(f"📋 Dual registration records: {len(df_dual)} rows")
+            
+            # Create efficient dual registration lookup dictionary
+            logger.info("🔍 Step 3: Building dual registration lookup dictionary...")
+            dual_lookup = {}
+            if not df_dual.empty:
+                # Create lookup by Location ID for fast access
+                for index, dual_row in df_dual.iterrows():
+                    location_id = self.clean_value(dual_row.get('Location ID'))
+                    if location_id:
+                        dual_lookup[location_id] = {
+                            'linked_organisation_id': self.clean_value(dual_row.get('Linked Organisation ID')),
+                            'relationship_type': self.clean_value(dual_row.get('Relationship')),
+                            'relationship_start_date': self.parse_date(dual_row.get('Relationship Start Date')),
+                            'primary_id': self.clean_value(dual_row.get('Primary ID'))
+                        }
+                        
+                    if (index + 1) % 50 == 0 or index + 1 == len(df_dual):
+                        logger.info(f"   🔄 Processed {index + 1}/{len(df_dual)} dual registration records")
+            
+            logger.info(f"✅ Dual registration lookup created: {len(dual_lookup)} location mappings")
+            
+            # Filter for care homes if requested
+            logger.info("🔽 Step 4: Applying data filters...")
+            if filter_care_homes is not None:
+                original_count = len(df_main)
+                if filter_care_homes:
+                    df_main = df_main[df_main['Care home?'] == 'Y']
+                    logger.info(f"✅ Care homes filter applied: {len(df_main)} records (from {original_count})")
+                else:
+                    df_main = df_main[df_main['Care home?'] != 'Y']
+                    logger.info(f"✅ Non-care homes filter applied: {len(df_main)} records (from {original_count})")
+            else:
+                logger.info(f"✅ No filter applied: processing all {len(df_main)} records")
+            
+            # Process main data with dual registration lookup
+            logger.info("🔄 Step 5: Processing main data records...")
+            processed_count = 0
+            dual_registrations_created = 0
+            providers_created = 0
+            locations_created = 0
+            
+            for index, row in df_main.iterrows():
+                try:
+                    current_record = index + 1
+                    
+                    # Progress logging every 100 records and at specific milestones
+                    if current_record % 100 == 0 or current_record in [1, 10, 50] or current_record == len(df_main):
+                        progress_pct = (current_record / len(df_main)) * 100
+                        logger.info(f"   📝 Processing record {current_record}/{len(df_main)} ({progress_pct:.1f}%)")
+                    
+                    # Create provider first
+                    provider_id = self.clean_value(row.get('Provider ID'))
+                    if current_record <= 10:  # Log details for first 10 records
+                        logger.info(f"      🏢 Processing provider: {provider_id}")
+                    
+                    provider = self.create_provider(row)
+                    if not provider:
+                        if current_record <= 10:
+                            logger.warning(f"      ⚠️  Skipped record {current_record}: no provider created")
+                        continue
+                    
+                    # Track if this is a new provider
+                    if provider_id not in getattr(self, '_seen_providers', set()):
+                        providers_created += 1
+                        if not hasattr(self, '_seen_providers'):
+                            self._seen_providers = set()
+                        self._seen_providers.add(provider_id)
+                    
+                    # Get or create location (static data)
+                    location_id = self.clean_value(row.get('Location ID'))
+                    location_name = self.clean_value(row.get('Location Name'))
+                    
+                    if current_record <= 10:
+                        logger.info(f"      🏠 Processing location: {location_id} - {location_name}")
+                    
+                    location = self.get_or_create_location(row, provider)
+                    if not location:
+                        if current_record <= 10:
+                            logger.warning(f"      ⚠️  Skipped record {current_record}: no location created")
+                        continue
+                    
+                    # Track if this is a new location
+                    if location_id not in getattr(self, '_seen_locations', set()):
+                        locations_created += 1
+                        if not hasattr(self, '_seen_locations'):
+                            self._seen_locations = set()
+                        self._seen_locations.add(location_id)
+                    
+                    # Create time-varying period data
+                    period_data = self.create_location_period_data(location, row, data_period)
+                    if not period_data:
+                        if current_record <= 10:
+                            logger.warning(f"      ⚠️  Skipped record {current_record}: no period data created")
+                        continue
+                    
+                    # Create activity flags for this period
+                    activity_flags = self.create_location_activity_flags(location, row, data_period)
+                    
+                    # Add activities, service types, and user bands (for backward compatibility)
+                    self.add_location_activities(location, row)
+                    self.add_location_service_types(location, row)
+                    self.add_location_user_bands(location, row)
+                    
+                    # Check for dual registration and process if found
+                    is_dual_registered = self.parse_boolean(row.get('Location Dual Registered'))
+                    
+                    if current_record <= 10:
+                        logger.info(f"      🔗 Dual registered: {is_dual_registered}")
+                    
+                    if is_dual_registered and location_id in dual_lookup:
+                        dual_info = dual_lookup[location_id]
+                        linked_organisation_id = dual_info['linked_organisation_id']
+                        relationship_type = dual_info['relationship_type']
+                        
+                        if current_record <= 10:
+                            logger.info(f"      🔗 Found dual registration: {location_id} ↔ {linked_organisation_id}")
+                        
+                        if linked_organisation_id and linked_organisation_id != location_id:
+                            # Verify linked organisation exists
+                            linked_location = self.db.query(Location).filter(
+                                Location.location_id == linked_organisation_id
+                            ).first()
+                            
+                            if linked_location:
+                                # Create dual registration records (bidirectional)
+                                # Primary ID field indicates if the CURRENT location (in the dual registration sheet row) is primary
+                                primary_id_value = dual_info['primary_id']
+                                is_location_primary = self.parse_boolean(primary_id_value)
+                                # For the linked location, the primary status is the opposite
+                                is_linked_primary = not is_location_primary
+                                
+                                # Create dual registration record for current location
+                                existing_dual = self.db.query(DualRegistration).filter(
+                                    DualRegistration.location_id == location_id,
+                                    DualRegistration.linked_organisation_id == linked_organisation_id,
+                                    DualRegistration.year == data_period.year,
+                                    DualRegistration.month == data_period.month
+                                ).first()
+                                
+                                if not existing_dual:
+                                    dual_reg = DualRegistration(
+                                        location_id=location_id,
+                                        linked_organisation_id=linked_organisation_id,
+                                        year=data_period.year,
+                                        month=data_period.month,
+                                        relationship_type=relationship_type,
+                                        relationship_start_date=dual_info['relationship_start_date'],
+                                        is_primary=is_location_primary
+                                    )
+                                    self.db.add(dual_reg)
+                                    dual_registrations_created += 1
+                                    
+                                    if current_record <= 10:
+                                        logger.info(f"         ✅ Created dual registration record")
+                                
+                                # Create reverse dual registration record
+                                existing_dual_reverse = self.db.query(DualRegistration).filter(
+                                    DualRegistration.location_id == linked_organisation_id,
+                                    DualRegistration.linked_organisation_id == location_id,
+                                    DualRegistration.year == data_period.year,
+                                    DualRegistration.month == data_period.month
+                                ).first()
+                                
+                                if not existing_dual_reverse:
+                                    dual_reg_reverse = DualRegistration(
+                                        location_id=linked_organisation_id,
+                                        linked_organisation_id=location_id,
+                                        year=data_period.year,
+                                        month=data_period.month,
+                                        relationship_type=relationship_type,
+                                        relationship_start_date=dual_info['relationship_start_date'],
+                                        is_primary=is_linked_primary
+                                    )
+                                    self.db.add(dual_reg_reverse)
+                                    
+                                    if current_record <= 10:
+                                        logger.info(f"         ✅ Created reverse dual registration record")
+                            else:
+                                if current_record <= 10:
+                                    logger.warning(f"      ⚠️  Linked organisation {linked_organisation_id} not found")
+                    
+                    # Commit the record
+                    self.db.commit()
+                    processed_count += 1
+                    
+                    # Progress updates at key intervals
+                    if processed_count % 500 == 0:
+                        elapsed = time.time() - start_time
+                        rate = processed_count / elapsed
+                        eta = (len(df_main) - processed_count) / rate if rate > 0 else 0
+                        logger.info(f"   ⏱️  Progress: {processed_count}/{len(df_main)} records ({rate:.1f} rec/sec, ETA: {eta/60:.1f}min)")
+                        
+                except Exception as e:
+                    self.db.rollback()
+                    error_msg = f"❌ Row {current_record}: {str(e)}"
+                    self.stats["errors"].append(error_msg)
+                    logger.error(error_msg)
+                    continue
+            
+            # Calculate final statistics
+            total_time = time.time() - start_time
+            records_per_second = processed_count / total_time if total_time > 0 else 0
+            
+            # Update statistics
+            self.stats["dual_registrations_processed"] = dual_registrations_created
+            self.stats["import_time_seconds"] = total_time
+            self.stats["records_per_second"] = records_per_second
+            self.stats["records_processed"] = processed_count
+            self.stats["providers_processed"] = providers_created
+            self.stats["locations_processed"] = locations_created
+            
+            # Final summary
+            logger.info("🎉 PARQUET IMPORT SUMMARY:")
+            logger.info(f"   📊 Records processed: {processed_count}/{len(df_main)}")
+            logger.info(f"   🏢 Providers processed: {providers_created}")
+            logger.info(f"   🏠 Locations processed: {locations_created}")
+            logger.info(f"   🔗 Dual registrations created: {dual_registrations_created}")
+            logger.info(f"   ⏱️  Total import time: {total_time:.2f} seconds")
+            logger.info(f"   🚀 Processing speed: {records_per_second:.1f} records/second")
+            logger.info(f"   📈 Performance: {len(df_main) / (total_time/60):.0f} records/minute")
+            
+            if self.stats["errors"]:
+                logger.warning(f"   ⚠️  Errors encountered: {len(self.stats['errors'])}")
+            
+            logger.info("✅ Optimized Parquet import completed successfully!")
+            
+            return self.stats
+            
+        except Exception as e:
+            logger.error(f"Parquet import failed: {str(e)}")
+            self.stats["errors"].append(f"Parquet import failed: {str(e)}")
+            return self.stats
