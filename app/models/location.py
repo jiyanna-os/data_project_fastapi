@@ -49,7 +49,6 @@ class Location(Base):
     regulated_activities = relationship("LocationRegulatedActivity", back_populates="location")
     service_types = relationship("LocationServiceType", back_populates="location")
     service_user_bands = relationship("LocationServiceUserBand", back_populates="location")
-    snapshot_data = relationship("LocationSnapshotData", back_populates="location")
     
     # Dual registration relationships
     dual_registrations_as_location = relationship("DualRegistration", foreign_keys="DualRegistration.location_id", back_populates="location")

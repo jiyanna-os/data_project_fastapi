@@ -6,7 +6,6 @@ from .location_activity_flags import LocationActivityFlags
 from .regulated_activity import RegulatedActivity, LocationRegulatedActivity
 from .service_type import ServiceType, LocationServiceType
 from .service_user_band import ServiceUserBand, LocationServiceUserBand
-from .monthly_snapshot import MonthlySnapshot, LocationSnapshotData
 from .data_period import DataPeriod
 
 __all__ = [
@@ -21,7 +20,5 @@ __all__ = [
     "LocationServiceType", 
     "ServiceUserBand",
     "LocationServiceUserBand",
-    "MonthlySnapshot",
-    "LocationSnapshotData",
     "DataPeriod"
 ]

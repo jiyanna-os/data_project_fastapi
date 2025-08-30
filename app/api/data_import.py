@@ -356,11 +356,8 @@ def clear_all_data(
         from app.models.regulated_activity import RegulatedActivity, LocationRegulatedActivity
         from app.models.service_type import ServiceType, LocationServiceType
         from app.models.service_user_band import ServiceUserBand, LocationServiceUserBand
-        from app.models.monthly_snapshot import MonthlySnapshot, LocationSnapshotData
         
         # Delete in order due to foreign key constraints
-        db.query(LocationSnapshotData).delete()
-        db.query(MonthlySnapshot).delete()
         db.query(LocationServiceUserBand).delete()
         db.query(LocationServiceType).delete()
         db.query(LocationRegulatedActivity).delete()

@@ -20,7 +20,6 @@ This is a **FastAPI-based CQC (Care Quality Commission) Healthcare Data API** th
 - **Provider** (app/models/provider.py): Healthcare provider organizations
 - **LocationPeriodData** (app/models/location_period_data.py): Time-series snapshots of location data
 - **Junction Tables**: Many-to-many relationships for activities, service types, and user bands
-- **MonthlySnapshot** (app/models/monthly_snapshot.py): Historical data tracking
 
 ### API Router Structure
 - **Locations**: `/api/v1/locations/` - Location CRUD and search endpoints
