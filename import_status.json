@@ -1,28 +1,28 @@
 {
-  "import_id": "import_1756593678",
+  "import_id": "import_1756594827",
   "filename": "08_2025.xlsx",
   "file_size_mb": 19.109472274780273,
   "file_type": "XLSX",
   "status": "completed",
   "phase": "data_import",
   "progress": 100,
-  "start_time": "2025-08-31T04:11:18.365255",
+  "start_time": "2025-08-31T04:30:27.902244",
   "current_step": "Import completed successfully",
   "estimated_duration_minutes": 12,
   "phases": {
     "parquet_conversion": {
       "status": "completed",
-      "start_time": "2025-08-31T04:11:18.365764",
-      "duration": 40.892453
+      "start_time": "2025-08-31T04:30:27.902743",
+      "duration": 40.864287
     },
     "data_import": {
       "status": "completed",
-      "start_time": "2025-08-31T04:11:59.258821",
-      "duration": 274.324828
+      "start_time": "2025-08-31T04:31:08.767640",
+      "duration": 286.121839
     }
   },
-  "last_updated": "2025-08-31T04:11:59.258810",
-  "end_time": "2025-08-31T04:16:33.583912",
+  "last_updated": "2025-08-31T04:31:08.767629",
+  "end_time": "2025-08-31T04:35:54.889750",
   "stats": {
     "brands_created": 265,
     "providers_created": 7201,
@@ -35,11 +35,11 @@
     "periods_created": 1,
     "errors": [],
     "dual_registrations_processed": 221,
-    "import_time_seconds": 274.31112694740295,
-    "records_per_second": 53.70179534432285,
+    "import_time_seconds": 286.10949873924255,
+    "records_per_second": 51.48728044651776,
     "records_processed": 14731,
     "providers_processed": 7201,
     "locations_processed": 14731
   },
-  "total_duration_seconds": 315.218669
+  "total_duration_seconds": 326.987519
 }

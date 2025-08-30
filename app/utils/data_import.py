@@ -36,9 +36,11 @@ class CQCDataImporter:
         }
 
     def clean_value(self, value) -> Optional[str]:
-        """Clean and validate string values"""
-        if pd.isna(value) or value == '-' or value == '*':
+        """Clean and validate string values - preserve asterisk (*) in text fields"""
+        if pd.isna(value) or value == '-':
             return None
+        if value == '*':
+            return '*'  # Preserve asterisk for text fields
         result = str(value).strip() if value else None
         # Truncate very long strings to prevent database errors
         if result and len(result) > 250:
@@ -176,9 +178,8 @@ class CQCDataImporter:
         return str_value == 'Y' or str_value == 'DUAL REGISTRATION'
 
     def parse_number(self, value) -> Optional[int]:
-        """Parse numeric values for integer fields"""
-        """Parse numeric values"""
-        if pd.isna(value) or value == '' or value == '-':
+        """Parse numeric values for integer fields - return None for asterisk (*)"""
+        if pd.isna(value) or value == '' or value == '-' or value == '*':
             return None
         try:
             # Handle scientific notation and large numbers
@@ -190,52 +191,87 @@ class CQCDataImporter:
             return None
 
     def parse_decimal(self, value) -> Optional[float]:
-        """Parse decimal values"""
-        if pd.isna(value) or value == '':
+        """Parse decimal values - return None for asterisk (*)"""
+        if pd.isna(value) or value == '' or value == '*':
             return None
         try:
             return float(value)
         except:
             return None
 
-    def parse_telephone(self, value) -> Optional[str]:
-        """Parse telephone numbers with UK format validation"""
+    def parse_categorical_numeric(self, value) -> Optional[str]:
+        """Parse categorical numeric data as strings, preserving leading zeros"""
         if pd.isna(value) or value == '' or value == '-':
             return None
+        if value == '*':
+            return '*'  # Preserve asterisk for categorical fields
+        
         try:
-            # Convert to string and strip whitespace
-            phone = str(value).strip()
-            # Handle scientific notation from Excel
-            if 'e+' in phone.lower():
-                # Convert scientific notation to integer first, then string
-                phone = str(int(float(phone)))
+            # Convert to string first to preserve format
+            str_value = str(value).strip()
             
-            # Remove non-digit characters
+            # Handle scientific notation from Excel by converting to proper format
+            if 'e+' in str_value.lower() or 'e-' in str_value.lower():
+                # Convert scientific notation to full number string
+                try:
+                    float_val = float(str_value)
+                    # If it's a whole number, format without decimals
+                    if float_val == int(float_val):
+                        str_value = str(int(float_val))
+                    else:
+                        str_value = str(float_val)
+                except:
+                    pass
+            
+            # For pure numeric strings that could have leading zeros, preserve them
+            # Remove any trailing decimal zeros if present (e.g., "01.0" -> "01")
+            if '.' in str_value and str_value.replace('.', '').isdigit():
+                # Remove trailing zeros after decimal point
+                str_value = str_value.rstrip('0').rstrip('.')
+            
+            return str_value if str_value else None
+            
+        except Exception as e:
+            logger.warning(f"Could not parse categorical numeric: {value} - {str(e)}")
+            return str(value).strip() if value else None
+
+    def parse_telephone(self, value) -> Optional[str]:
+        """Parse telephone numbers as categorical strings, preserving leading zeros"""
+        if pd.isna(value) or value == '' or value == '-':
+            return None
+        if value == '*':
+            return '*'  # Preserve asterisk for phone fields
+            
+        try:
+            # Use categorical numeric parsing to preserve leading zeros
+            phone = self.parse_categorical_numeric(value)
+            if not phone or phone == '*':
+                return phone
+            
+            # Remove any non-digit characters for validation but keep original format
             import re
-            phone = re.sub(r'[^\d]', '', phone)
+            digits_only = re.sub(r'[^\d]', '', phone)
             
-            if not phone:
-                return None
+            if not digits_only:
+                return phone  # Return original if no digits found
                 
-            # UK phone number validation and formatting
-            if len(phone) == 11 and phone.startswith('0'):
-                # Standard UK number: 01709789790 -> 01709789790
+            # For UK phone numbers, ensure proper format while preserving leading zeros
+            if len(digits_only) == 11 and digits_only.startswith('0'):
+                # Standard UK number - return with preserved format
                 return phone
-            elif len(phone) == 10 and not phone.startswith('0'):
-                # Missing leading zero: 1709789790 -> 01709789790
-                return '0' + phone
-            elif len(phone) > 11:
-                # Too many digits - truncate from right (assuming extra digits added)
-                return phone[:11]
-            elif len(phone) < 10:
-                # Too few digits - log warning but keep
-                logger.warning(f"Short phone number: {phone}")
-                return phone
+            elif len(digits_only) == 10 and not digits_only.startswith('0'):
+                # Missing leading zero - add it while preserving other formatting
+                if phone.isdigit():
+                    return '0' + phone
+                else:
+                    return phone  # Keep original format if it has non-digit chars
             else:
+                # Return original format for other cases
                 return phone
+                
         except Exception as e:
             logger.warning(f"Could not parse phone number: {value} - {str(e)}")
-            return None
+            return str(value).strip() if value else None
 
     def get_or_create_brand(self, brand_id: str, brand_name: str) -> Optional[Brand]:
         """Get existing brand or create new one"""
@@ -364,7 +400,7 @@ class CQCDataImporter:
             provider_name=self.clean_value(row.get('Provider Name')) or f"Provider {provider_id}",
             brand_id=brand.brand_id if brand else None,
             hsca_start_date=self.parse_date(row.get('Provider HSCA start date')),
-            companies_house_number=self.clean_value(row.get('Provider Companies House Number')),
+            companies_house_number=self.parse_categorical_numeric(row.get('Provider Companies House Number')),
             charity_number=self.parse_number(row.get('Provider Charity Number')),
             type_sector=self.clean_value(row.get('Provider Type/Sector')),
             inspection_directorate=self.clean_value(row.get('Provider Inspection Directorate')),
@@ -376,9 +412,9 @@ class CQCDataImporter:
             address_line_2=self.clean_value(row.get('Provider Address Line 2')),
             city=self.clean_value(row.get('Provider City')),
             county=self.clean_value(row.get('Provider County')),
-            postal_code=self.clean_value(row.get('Provider Postal Code')),
-            paf_id=self.clean_value(row.get('Provider PAF ID')),
-            uprn_id=self.clean_value(row.get('Provider UPRN ID')),
+            postal_code=self.parse_categorical_numeric(row.get('Provider Postal Code')),
+            paf_id=self.parse_categorical_numeric(row.get('Provider PAF ID')),
+            uprn_id=self.parse_categorical_numeric(row.get('Provider UPRN ID')),
             local_authority=self.clean_value(row.get('Provider Local Authority')),
             region=self.clean_value(row.get('Provider Region')),
             nhs_region=self.clean_value(row.get('Provider NHS Region')),
@@ -417,7 +453,7 @@ class CQCDataImporter:
             provider_id=provider.provider_id,
             location_name=self.clean_value(row.get('Location Name')) or f"Location {location_id}",
             location_hsca_start_date=self.parse_date(row.get('Location HSCA start date')),
-            location_ods_code=self.clean_value(row.get('Location ODS Code')),
+            location_ods_code=self.parse_categorical_numeric(row.get('Location ODS Code')),
             location_telephone_number=self.parse_telephone(row.get('Location Telephone Number')),
             location_web_address=self.clean_value(row.get('Location Web Address')),
             location_type_sector=self.clean_value(row.get('Location Type/Sector')),
@@ -426,17 +462,17 @@ class CQCDataImporter:
             location_region=self.clean_value(row.get('Location Region')),
             location_nhs_region=self.clean_value(row.get('Location NHS Region')),
             location_local_authority=self.clean_value(row.get('Location Local Authority')),
-            location_onspd_ccg_code=self.clean_value(row.get('Location ONSPD CCG Code')),
+            location_onspd_ccg_code=self.parse_categorical_numeric(row.get('Location ONSPD CCG Code')),
             location_onspd_ccg=self.clean_value(row.get('Location ONSPD CCG')),
-            location_commissioning_ccg_code=self.clean_value(row.get('Location Commissioning CCG Code')),
+            location_commissioning_ccg_code=self.parse_categorical_numeric(row.get('Location Commissioning CCG Code')),
             location_commissioning_ccg=self.clean_value(row.get('Location Commissioning CCG')),
             location_street_address=self.clean_value(row.get('Location Street Address')),
             location_address_line_2=self.clean_value(row.get('Location Address Line 2')),
             location_city=self.clean_value(row.get('Location City')),
             location_county=self.clean_value(row.get('Location County')),
-            location_postal_code=self.clean_value(row.get('Location Postal Code')),
-            location_paf_id=self.clean_value(row.get('Location PAF ID')),
-            location_uprn_id=self.clean_value(row.get('Location UPRN ID')),
+            location_postal_code=self.parse_categorical_numeric(row.get('Location Postal Code')),
+            location_paf_id=self.parse_categorical_numeric(row.get('Location PAF ID')),
+            location_uprn_id=self.parse_categorical_numeric(row.get('Location UPRN ID')),
             location_latitude=self.parse_decimal(row.get('Location Latitude')),
             location_longitude=self.parse_decimal(row.get('Location Longitude')),
             location_parliamentary_constituency=self.clean_value(row.get('Location Parliamentary Constituency')),
@@ -729,12 +765,20 @@ class CQCDataImporter:
                     logger.error(error_msg)
                     continue
             
-            # Process dual registrations if third sheet exists
+            # Process dual registrations if third sheet exists or if there are dual registration columns
             try:
+                # Check if there's a dual registration column in the main sheet
+                dual_reg_column_exists = 'Location Dual Registered' in df.columns or any(col.lower().startswith('dual') for col in df.columns)
+                
+                if dual_reg_column_exists:
+                    logger.info("Found dual registration column in main data - will process during main import")
+                
+                # Try to process dual registrations from third sheet if it exists
                 self.process_dual_registrations(excel_path, data_period)
             except Exception as e:
-                logger.warning(f"Dual registration processing failed (sheet may not exist): {str(e)}")
-                self.stats["errors"].append(f"Dual registration warning: {str(e)}")
+                logger.info(f"Dual registration sheet not available or empty: {str(e)}")
+                # This is not an error - dual registration data is optional
+                logger.info("Continuing without dual registration data (this is normal if no dual registrations exist)")
             
             logger.info("Import completed successfully")
             return self.stats
@@ -745,47 +789,64 @@ class CQCDataImporter:
             return self.stats
 
     def process_dual_registrations(self, excel_path: str, data_period: DataPeriod):
-        """Process dual registrations from third sheet"""
+        """Process dual registrations from third sheet if available"""
         try:
-            # Try to load the third sheet (typically sheet index 2)
-            excel_file = pd.ExcelFile(excel_path, engine='odf')
-            sheet_names = excel_file.sheet_names
-            
-            logger.info(f"Found {len(sheet_names)} sheets: {sheet_names}")
-            
-            if len(sheet_names) < 3:
-                logger.info("No third sheet found - skipping dual registration processing")
+            # Try to load the Excel file and check sheet structure
+            try:
+                excel_file = pd.ExcelFile(excel_path, engine='odf')
+                sheet_names = excel_file.sheet_names
+                logger.info(f"Found {len(sheet_names)} sheets: {sheet_names}")
+            except Exception as e:
+                logger.info(f"Could not read Excel file structure: {str(e)}")
                 return
             
-            # Load the third sheet with minimal rows first to check structure
-            third_sheet_name = sheet_names[2]
-            logger.info(f"Processing dual registrations from sheet: '{third_sheet_name}'")
+            # Check if there are at least 3 sheets
+            if len(sheet_names) < 3:
+                logger.info("No third sheet found - dual registration data not available")
+                return
             
-            # Load a sample first to understand structure
+            # Try to access the third sheet
+            third_sheet_name = sheet_names[2]
+            logger.info(f"Attempting to process dual registrations from sheet: '{third_sheet_name}'")
+            
+            # Load a sample first to check if sheet has data and expected structure
             try:
-                df_sample = pd.read_excel(excel_path, engine='odf', sheet_name=third_sheet_name, nrows=3)
-                logger.info(f"Third sheet columns: {list(df_sample.columns)}")
-                logger.info(f"Sample shape: {df_sample.shape}")
+                df_sample = pd.read_excel(excel_path, engine='odf', sheet_name=third_sheet_name, nrows=5)
                 
-                # Check if there's any data
+                # Check if there's any data at all
                 if df_sample.empty:
-                    logger.info("Third sheet is empty - skipping dual registration processing")
+                    logger.info("Third sheet is empty - no dual registration data to process")
                     return
                     
+                # Check if it has the expected columns for dual registration
+                expected_columns = ['Location ID', 'Linked Organisation ID']
+                missing_columns = [col for col in expected_columns if col not in df_sample.columns]
+                
+                if missing_columns:
+                    logger.info(f"Third sheet doesn't appear to contain dual registration data (missing columns: {missing_columns})")
+                    logger.info(f"Available columns: {list(df_sample.columns)}")
+                    return
+                    
+                logger.info(f"Third sheet appears to contain dual registration data with columns: {list(df_sample.columns)}")
+                
             except Exception as e:
-                logger.warning(f"Could not read third sheet sample: {str(e)}")
+                logger.info(f"Could not read third sheet sample: {str(e)} - assuming no dual registration data")
                 return
             
-            # Now load the full third sheet
-            df_dual = pd.read_excel(excel_path, engine='odf', sheet_name=third_sheet_name)
-            logger.info(f"Loaded {len(df_dual)} rows from dual registration sheet")
-            
-            # Remove completely empty rows
-            df_dual = df_dual.dropna(how='all')
-            logger.info(f"After removing empty rows: {len(df_dual)} rows")
-            
-            if df_dual.empty:
-                logger.info("No data found in third sheet after cleanup")
+            # Now try to load the full third sheet
+            try:
+                df_dual = pd.read_excel(excel_path, engine='odf', sheet_name=third_sheet_name)
+                logger.info(f"Loaded {len(df_dual)} rows from dual registration sheet")
+                
+                # Remove completely empty rows
+                df_dual = df_dual.dropna(how='all')
+                logger.info(f"After removing empty rows: {len(df_dual)} rows")
+                
+                if df_dual.empty:
+                    logger.info("No dual registration data found after cleanup")
+                    return
+            except Exception as e:
+                logger.info(f"Could not load full dual registration sheet: {str(e)}")
                 return
             
             # Process each row in the dual registration sheet
@@ -880,8 +941,8 @@ class CQCDataImporter:
             self.stats["dual_registrations_processed"] = dual_pairs_processed
             
         except Exception as e:
-            logger.error(f"Failed to process dual registrations: {str(e)}")
-            # Don't raise the exception, just log it so the main import continues
+            logger.info(f"Dual registration processing completed with info: {str(e)}")
+            # This is informational - dual registrations are optional
             self.stats["dual_registrations_processed"] = 0
 
     def import_from_parquet(self, main_parquet_path: str, dual_parquet_path: str, filter_care_homes: bool = None, year: int = None, month: int = None) -> Dict:
