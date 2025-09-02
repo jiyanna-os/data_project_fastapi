@@ -765,15 +765,9 @@ class CQCDataImporter:
                     logger.error(error_msg)
                     continue
             
-            # Process dual registrations if third sheet exists or if there are dual registration columns
+            # Process dual registrations from third sheet if it exists (independent of main sheet columns)
+            logger.info("Processing dual registrations from third sheet (if available)...")
             try:
-                # Check if there's a dual registration column in the main sheet
-                dual_reg_column_exists = 'Location Dual Registered' in df.columns or any(col.lower().startswith('dual') for col in df.columns)
-                
-                if dual_reg_column_exists:
-                    logger.info("Found dual registration column in main data - will process during main import")
-                
-                # Try to process dual registrations from third sheet if it exists
                 self.process_dual_registrations(excel_path, data_period)
             except Exception as e:
                 logger.info(f"Dual registration sheet not available or empty: {str(e)}")
@@ -1028,10 +1022,9 @@ class CQCDataImporter:
             else:
                 logger.info(f"✅ No filter applied: processing all {len(df_main)} records")
             
-            # Process main data with dual registration lookup
+            # Process main data
             logger.info("🔄 Step 5: Processing main data records...")
             processed_count = 0
-            dual_registrations_created = 0
             providers_created = 0
             locations_created = 0
             
@@ -1097,32 +1090,47 @@ class CQCDataImporter:
                     self.add_location_service_types(location, row)
                     self.add_location_user_bands(location, row)
                     
-                    # Check for dual registration and process if found
-                    is_dual_registered = self.parse_boolean(row.get('Location Dual Registered'))
+                    # Note: Dual registration processing moved to separate step after main data processing
                     
-                    if current_record <= 10:
-                        logger.info(f"      🔗 Dual registered: {is_dual_registered}")
+                    # Commit the record
+                    self.db.commit()
+                    processed_count += 1
                     
-                    if is_dual_registered and location_id in dual_lookup:
-                        dual_info = dual_lookup[location_id]
+                    # Progress updates at key intervals
+                    if processed_count % 500 == 0:
+                        elapsed = time.time() - start_time
+                        rate = processed_count / elapsed
+                        eta = (len(df_main) - processed_count) / rate if rate > 0 else 0
+                        logger.info(f"   ⏱️  Progress: {processed_count}/{len(df_main)} records ({rate:.1f} rec/sec, ETA: {eta/60:.1f}min)")
+                        
+                except Exception as e:
+                    self.db.rollback()
+                    error_msg = f"❌ Row {current_record}: {str(e)}"
+                    self.stats["errors"].append(error_msg)
+                    logger.error(error_msg)
+                    continue
+            
+            # Process dual registrations separately after main data
+            logger.info("🔗 Step 6: Processing dual registrations...")
+            dual_registrations_created = 0
+            
+            if not df_dual.empty:
+                logger.info(f"📋 Processing {len(dual_lookup)} dual registration mappings...")
+                
+                for location_id, dual_info in dual_lookup.items():
+                    try:
                         linked_organisation_id = dual_info['linked_organisation_id']
                         relationship_type = dual_info['relationship_type']
                         
-                        if current_record <= 10:
-                            logger.info(f"      🔗 Found dual registration: {location_id} ↔ {linked_organisation_id}")
-                        
                         if linked_organisation_id and linked_organisation_id != location_id:
-                            # Verify linked organisation exists
-                            linked_location = self.db.query(Location).filter(
-                                Location.location_id == linked_organisation_id
-                            ).first()
+                            # Verify both locations exist
+                            location = self.db.query(Location).filter(Location.location_id == location_id).first()
+                            linked_location = self.db.query(Location).filter(Location.location_id == linked_organisation_id).first()
                             
-                            if linked_location:
+                            if location and linked_location:
                                 # Create dual registration records (bidirectional)
-                                # Primary ID field indicates if the CURRENT location (in the dual registration sheet row) is primary
                                 primary_id_value = dual_info['primary_id']
                                 is_location_primary = self.parse_boolean(primary_id_value)
-                                # For the linked location, the primary status is the opposite
                                 is_linked_primary = not is_location_primary
                                 
                                 # Create dual registration record for current location
@@ -1145,9 +1153,6 @@ class CQCDataImporter:
                                     )
                                     self.db.add(dual_reg)
                                     dual_registrations_created += 1
-                                    
-                                    if current_record <= 10:
-                                        logger.info(f"         ✅ Created dual registration record")
                                 
                                 # Create reverse dual registration record
                                 existing_dual_reverse = self.db.query(DualRegistration).filter(
@@ -1168,31 +1173,24 @@ class CQCDataImporter:
                                         is_primary=is_linked_primary
                                     )
                                     self.db.add(dual_reg_reverse)
-                                    
-                                    if current_record <= 10:
-                                        logger.info(f"         ✅ Created reverse dual registration record")
+                                
+                                # Commit dual registration records
+                                self.db.commit()
+                                
+                                logger.info(f"✅ Created dual registration: {location.location_name} ↔ {linked_location.location_name}")
                             else:
-                                if current_record <= 10:
-                                    logger.warning(f"      ⚠️  Linked organisation {linked_organisation_id} not found")
-                    
-                    # Commit the record
-                    self.db.commit()
-                    processed_count += 1
-                    
-                    # Progress updates at key intervals
-                    if processed_count % 500 == 0:
-                        elapsed = time.time() - start_time
-                        rate = processed_count / elapsed
-                        eta = (len(df_main) - processed_count) / rate if rate > 0 else 0
-                        logger.info(f"   ⏱️  Progress: {processed_count}/{len(df_main)} records ({rate:.1f} rec/sec, ETA: {eta/60:.1f}min)")
-                        
-                except Exception as e:
-                    self.db.rollback()
-                    error_msg = f"❌ Row {current_record}: {str(e)}"
-                    self.stats["errors"].append(error_msg)
-                    logger.error(error_msg)
-                    continue
-            
+                                if not location:
+                                    logger.warning(f"⚠️  Location not found: {location_id}")
+                                if not linked_location:
+                                    logger.warning(f"⚠️  Linked location not found: {linked_organisation_id}")
+                    except Exception as e:
+                        logger.warning(f"❌ Failed to process dual registration for {location_id}: {str(e)}")
+                        continue
+                
+                logger.info(f"✅ Dual registration processing complete: {dual_registrations_created} pairs created")
+            else:
+                logger.info("📋 No dual registration data found")
+
             # Calculate final statistics
             total_time = time.time() - start_time
             records_per_second = processed_count / total_time if total_time > 0 else 0

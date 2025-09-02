@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query
 from sqlalchemy.orm import Session
-from typing import Dict, Any
+from typing import Dict, Any, List
 from pathlib import Path
 import logging
 from app.core.database import get_db
@@ -813,3 +813,254 @@ async def get_import_status(import_id: str = None):
     except Exception as e:
         logger.error(f"Failed to get import status: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to get import status: {str(e)}")
+
+
+def import_multiple_files_background(filenames: List[str], db: Session, filter_care_homes: bool = None):
+    """Background task to import multiple data files sequentially"""
+    import_results = []
+    total_stats = {
+        "brands_created": 0,
+        "providers_created": 0,
+        "locations_created": 0,
+        "location_period_data_created": 0,
+        "location_activity_flags_created": 0,
+        "activities_created": 0,
+        "service_types_created": 0,
+        "user_bands_created": 0,
+        "periods_created": 0,
+        "errors": []
+    }
+    
+    try:
+        import re
+        import os
+        from pathlib import Path
+        
+        for i, filename in enumerate(filenames, 1):
+            logger.info(f"Processing file {i}/{len(filenames)}: {filename}")
+            
+            try:
+                # Parse month and year from filename (support both .ods and .xlsx)
+                pattern = r'^(\d{2})_(\d{4})\.(ods|xlsx)$'
+                match = re.match(pattern, filename)
+                
+                if not match:
+                    error_msg = f"Invalid filename format: {filename}. Expected format: mm_yyyy.ods or mm_yyyy.xlsx"
+                    logger.error(error_msg)
+                    import_results.append({
+                        "filename": filename,
+                        "status": "failed",
+                        "error": error_msg
+                    })
+                    total_stats["errors"].append(error_msg)
+                    continue
+                
+                month = int(match.group(1))
+                year = int(match.group(2))
+                
+                # Validate month and year
+                if not (1 <= month <= 12):
+                    error_msg = f"Invalid month in filename {filename}: {month:02d}. Month must be between 01 and 12"
+                    logger.error(error_msg)
+                    import_results.append({
+                        "filename": filename,
+                        "status": "failed",
+                        "error": error_msg
+                    })
+                    total_stats["errors"].append(error_msg)
+                    continue
+                
+                if year < 2000 or year > 2030:
+                    error_msg = f"Invalid year in filename {filename}: {year}. Year must be between 2000 and 2030"
+                    logger.error(error_msg)
+                    import_results.append({
+                        "filename": filename,
+                        "status": "failed",
+                        "error": error_msg
+                    })
+                    total_stats["errors"].append(error_msg)
+                    continue
+                
+                # Construct file path
+                data_folder = Path("Data")
+                file_path = data_folder / filename
+                
+                if not file_path.exists():
+                    error_msg = f"File not found: {file_path}"
+                    logger.error(error_msg)
+                    import_results.append({
+                        "filename": filename,
+                        "status": "failed",
+                        "error": error_msg
+                    })
+                    total_stats["errors"].append(error_msg)
+                    continue
+                
+                # Convert to Parquet files for faster processing
+                converter = ParquetConverter()
+                conversion_result = converter.convert_ods_to_parquet(str(file_path), str(data_folder))
+                
+                main_parquet = conversion_result["main_parquet"]
+                dual_parquet = conversion_result["dual_parquet"]
+                
+                # Import from optimized Parquet files
+                importer = CQCDataImporter(db)
+                stats = importer.import_from_parquet(main_parquet, dual_parquet, filter_care_homes, year, month)
+                
+                # Add to totals
+                for key in ["brands_created", "providers_created", "locations_created", 
+                          "location_period_data_created", "location_activity_flags_created",
+                          "activities_created", "service_types_created", "user_bands_created", 
+                          "periods_created"]:
+                    total_stats[key] += stats.get(key, 0)
+                
+                if stats.get("errors"):
+                    total_stats["errors"].extend(stats["errors"])
+                
+                import_results.append({
+                    "filename": filename,
+                    "year": year,
+                    "month": month,
+                    "status": "completed",
+                    "stats": stats
+                })
+                
+                logger.info(f"Successfully imported {filename}: {stats}")
+                
+            except Exception as file_error:
+                error_msg = f"Failed to import {filename}: {str(file_error)}"
+                logger.error(error_msg)
+                import_results.append({
+                    "filename": filename,
+                    "status": "failed",
+                    "error": error_msg
+                })
+                total_stats["errors"].append(error_msg)
+        
+        logger.info(f"Multi-file import completed. Processed {len(filenames)} files. Total stats: {total_stats}")
+        
+        # Store results in import tracker
+        import_id = f"multi_import_{int(__import__('time').time())}"
+        import_tracker.set_import_status(import_id, {
+            "status": "completed",
+            "files_processed": len(filenames),
+            "successful_imports": len([r for r in import_results if r["status"] == "completed"]),
+            "failed_imports": len([r for r in import_results if r["status"] == "failed"]),
+            "import_results": import_results,
+            "total_statistics": total_stats
+        })
+        
+    except Exception as e:
+        error_msg = f"Multi-file import failed: {str(e)}"
+        logger.error(error_msg)
+        total_stats["errors"].append(error_msg)
+
+
+@router.post("/import-multiple-files")
+def import_multiple_files(
+    background_tasks: BackgroundTasks,
+    filenames: List[str] = Query(..., description="List of filenames in format mm_yyyy.ods or mm_yyyy.xlsx (e.g., ['01_2025.ods', '02_2025.xlsx'])"),
+    run_in_background: bool = Query(False, description="Run import in background"),
+    filter_care_homes: bool = Query(None, description="Filter: True=care homes only, False=non-care homes only, None=all"),
+    db: Session = Depends(get_db)
+) -> Dict[str, Any]:
+    """
+    Import multiple CQC data files sequentially from Data folder with Parquet optimization.
+    
+    This endpoint processes files in the exact order provided, importing them one by one.
+    Each file is automatically converted to Parquet format for dramatically faster processing.
+    
+    Args:
+        filenames: List of filenames in format mm_yyyy.ods or mm_yyyy.xlsx (e.g., ["01_2025.ods", "02_2025.xlsx"])
+        run_in_background: If True, run import as background task
+        filter_care_homes: If True, import only care homes; if False, import only non-care homes; if None, import all
+        
+    Returns:
+        Import status and file processing information
+        
+    Performance: Each file gets ~10-20x performance improvement (45 minutes → 2-5 minutes per file)
+        
+    Examples:
+        - filenames=["01_2025.ods", "02_2025.ods", "03_2025.xlsx"] (imports Jan, Feb, Mar 2025 in order)
+        - filenames=["12_2024.xlsx", "01_2025.ods"] (imports Dec 2024, then Jan 2025)
+    """
+    
+    # Validate input
+    if not filenames:
+        raise HTTPException(status_code=400, detail="At least one filename must be provided")
+    
+    if len(filenames) > 50:  # Reasonable limit to prevent abuse
+        raise HTTPException(status_code=400, detail="Cannot process more than 50 files at once")
+    
+    # Validate all filenames before starting
+    import re
+    pattern = r'^(\d{2})_(\d{4})\.(ods|xlsx)$'
+    
+    for filename in filenames:
+        match = re.match(pattern, filename)
+        if not match:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid filename format: {filename}. Expected format: mm_yyyy.ods or mm_yyyy.xlsx (e.g., 08_2025.ods, 06_2025.xlsx)"
+            )
+        
+        month = int(match.group(1))
+        year = int(match.group(2))
+        
+        if not (1 <= month <= 12):
+            raise HTTPException(status_code=400, detail=f"Invalid month in {filename}: {month:02d}. Month must be between 01 and 12")
+        
+        if year < 2000 or year > 2030:
+            raise HTTPException(status_code=400, detail=f"Invalid year in {filename}: {year}. Year must be between 2000 and 2030")
+    
+    # Check if all files exist before starting
+    data_folder = Path("Data")
+    missing_files = []
+    for filename in filenames:
+        file_path = data_folder / filename
+        if not file_path.exists():
+            missing_files.append(str(file_path))
+    
+    if missing_files:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Files not found: {', '.join(missing_files)}"
+        )
+    
+    if run_in_background:
+        background_tasks.add_task(
+            import_multiple_files_background,
+            filenames,
+            db,
+            filter_care_homes
+        )
+        
+        filter_msg = ""
+        if filter_care_homes is True:
+            filter_msg = " (care homes only)"
+        elif filter_care_homes is False:
+            filter_msg = " (non-care homes only)"
+        
+        return {
+            "message": f"Multi-file Parquet import started in background{filter_msg}",
+            "filenames": filenames,
+            "total_files": len(filenames),
+            "status": "running",
+            "optimization": "Each file will be converted to Parquet format for faster processing"
+        }
+    else:
+        # Run synchronously
+        import_multiple_files_background(filenames, db, filter_care_homes)
+        
+        filter_msg = ""
+        if filter_care_homes is True:
+            filter_msg = " (care homes only)"
+        elif filter_care_homes is False:
+            filter_msg = " (non-care homes only)"
+        
+        return {
+            "message": f"Multi-file Parquet import completed{filter_msg}",
+            "filenames": filenames,
+            "total_files": len(filenames),
+            "status": "completed"
+        }
