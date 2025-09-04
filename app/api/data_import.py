@@ -309,7 +309,7 @@ def get_import_status(db: Session = Depends(get_db)) -> Dict[str, Any]:
     from app.models.provider import Provider
     from app.models.location import Location
     from app.models.location_period_data import LocationPeriodData
-    from app.models.location_activity_flags import LocationActivityFlags
+    # LocationActivityFlags import removed - table no longer used
     from app.models.regulated_activity import RegulatedActivity
     from app.models.service_type import ServiceType
     from app.models.service_user_band import ServiceUserBand
@@ -321,7 +321,6 @@ def get_import_status(db: Session = Depends(get_db)) -> Dict[str, Any]:
             "providers": db.query(Provider).count(),
             "locations": db.query(Location).count(),
             "location_period_data": db.query(LocationPeriodData).count(),
-            "location_activity_flags": db.query(LocationActivityFlags).count(),
             "data_periods": db.query(DataPeriod).count(),
             "regulated_activities": db.query(RegulatedActivity).count(),
             "service_types": db.query(ServiceType).count(),
@@ -833,7 +832,6 @@ def import_multiple_files_background(filenames: List[str], db: Session, filter_c
         "providers_created": 0,
         "locations_created": 0,
         "location_period_data_created": 0,
-        "location_activity_flags_created": 0,
         "activities_created": 0,
         "service_types_created": 0,
         "user_bands_created": 0,
@@ -919,7 +917,7 @@ def import_multiple_files_background(filenames: List[str], db: Session, filter_c
                 
                 # Add to totals
                 for key in ["brands_created", "providers_created", "locations_created", 
-                          "location_period_data_created", "location_activity_flags_created",
+                          "location_period_data_created",
                           "activities_created", "service_types_created", "user_bands_created", 
                           "periods_created"]:
                     total_stats[key] += stats.get(key, 0)

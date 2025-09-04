@@ -38,15 +38,11 @@ class Location(Base):
     location_latitude = Column(DECIMAL)
     location_longitude = Column(DECIMAL)
     location_parliamentary_constituency = Column(String)
-    
-    # Location additional fields
-    location_also_known_as = Column(String)
-    location_specialisms = Column(String)
 
     # Relationships
     provider = relationship("Provider", back_populates="locations")
     period_data = relationship("LocationPeriodData", back_populates="location")
-    activity_flags = relationship("LocationActivityFlags", back_populates="location")
+    # activity_flags relationship removed - table no longer used
     regulated_activities = relationship("LocationRegulatedActivity", back_populates="location")
     service_types = relationship("LocationServiceType", back_populates="location")
     service_user_bands = relationship("LocationServiceUserBand", back_populates="location")

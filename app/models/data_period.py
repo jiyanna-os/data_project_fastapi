@@ -20,7 +20,7 @@ class DataPeriod(Base):
 
     # Relationships
     location_data = relationship("LocationPeriodData", back_populates="data_period")
-    location_activity_flags = relationship("LocationActivityFlags", back_populates="data_period")
+    # location_activity_flags relationship removed - table no longer used
     location_regulated_activities = relationship("LocationRegulatedActivity", back_populates="data_period")
     location_service_types = relationship("LocationServiceType", back_populates="data_period")
     location_service_user_bands = relationship("LocationServiceUserBand", back_populates="data_period")

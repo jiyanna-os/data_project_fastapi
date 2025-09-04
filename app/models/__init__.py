@@ -2,7 +2,7 @@ from .brand import Brand
 from .provider import Provider
 from .location import Location
 from .location_period_data import LocationPeriodData
-from .location_activity_flags import LocationActivityFlags
+# LocationActivityFlags import removed - table no longer used
 from .regulated_activity import RegulatedActivity, LocationRegulatedActivity
 from .service_type import ServiceType, LocationServiceType
 from .service_user_band import ServiceUserBand, LocationServiceUserBand
@@ -15,7 +15,7 @@ __all__ = [
     "Provider", 
     "Location",
     "LocationPeriodData",
-    "LocationActivityFlags",
+    # "LocationActivityFlags", # Removed - table no longer used
     "RegulatedActivity",
     "LocationRegulatedActivity",
     "ServiceType",

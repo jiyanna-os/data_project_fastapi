@@ -9,9 +9,67 @@ from app.core.database import get_db
 from app.models.regulated_activity import RegulatedActivity
 from app.models.service_type import ServiceType  
 from app.models.service_user_band import ServiceUserBand
+import re
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+def convert_to_api_key(column_name: str) -> str:
+    """
+    Convert column names to lowercase underscore format for API JSON keys.
+    
+    Examples:
+    - "Location ID" -> "location_id"
+    - "Regulated activity - Accommodation for persons who require nursing or personal care" -> "regulated_activity_accommodation_for_persons_who_require_nursing_or_personal_care"
+    - "Service type - Care home service with nursing" -> "service_type_care_home_service_with_nursing"
+    """
+    # Convert to lowercase
+    result = column_name.lower()
+    
+    # Replace common patterns
+    result = re.sub(r'\s*-\s*', '_', result)  # " - " -> "_"
+    result = re.sub(r'[^\w\s]', '', result)   # Remove punctuation except underscores
+    result = re.sub(r'\s+', '_', result)      # Multiple spaces -> single underscore
+    result = re.sub(r'_+', '_', result)       # Multiple underscores -> single underscore
+    result = result.strip('_')                # Remove leading/trailing underscores
+    
+    return result
+
+
+def create_sql_alias(api_key: str, index: int) -> str:
+    """
+    Create a short SQL alias that fits within PostgreSQL's 63-character limit.
+    For long column names, use a simple indexed alias.
+    """
+    if len(api_key) <= 60:  # Leave some margin for safety
+        return api_key
+    
+    # For very long names, create a short indexed alias
+    if api_key.startswith('regulated_activity_'):
+        return f"reg_activity_{index}"
+    elif api_key.startswith('service_type_'):
+        return f"service_type_{index}"
+    elif api_key.startswith('service_user_band_'):
+        return f"user_band_{index}"
+    else:
+        # Generic short alias
+        return f"col_{index}"
+
+
+def get_api_to_sql_mapping(db: Session) -> Dict[str, str]:
+    """
+    Create mapping from API column names (underscore format) to SQL column expressions.
+    This allows users to filter using underscore format but maps to original column names in SQL.
+    """
+    original_columns = get_dynamic_available_columns(db)
+    api_to_sql = {}
+    
+    for original_name, sql_expr in original_columns.items():
+        api_name = convert_to_api_key(original_name)
+        api_to_sql[api_name] = sql_expr
+        
+    return api_to_sql
 
 
 class FilterCondition(BaseModel):
@@ -35,119 +93,81 @@ class FilterRequest(BaseModel):
 
 def get_dynamic_available_columns(db: Session) -> Dict[str, str]:
     """
-    Dynamically build available columns by querying the database.
-    This ensures we always have the latest column definitions.
+    Dynamically build available columns by introspecting the database schema.
+    This ensures the API is 100% database-driven with no hardcoded columns.
     """
-    # Base static columns (non-boolean)
-    base_columns = {
-        # Location identification and basic info
-        "location_id": "l.location_id",
-        "location_hsca_start_date": "l.location_hsca_start_date",
-        "is_dormant": "lpd.is_dormant",
-        "is_care_home": "lpd.is_care_home",
-        "location_name": "l.location_name",
-        "location_ods_code": "l.location_ods_code",
-        "location_telephone_number": "l.location_telephone_number",
-        "registered_manager": "lpd.registered_manager",
-        "care_homes_beds": "lpd.care_homes_beds",
-        "location_type_sector": "l.location_type_sector",
-        
-        # Inspection and rating
-        "location_inspection_directorate": "l.location_inspection_directorate",
-        "location_primary_inspection_category": "l.location_primary_inspection_category",
-        "latest_overall_rating": "lpd.latest_overall_rating",
-        "publication_date": "lpd.publication_date",
-        "is_inherited_rating": "lpd.is_inherited_rating",
-
-        # Geographic information
-        "location_region": "l.location_region",
-        "location_nhs_region": "l.location_nhs_region",
-        "location_local_authority": "l.location_local_authority",
-        "location_onspd_ccg_code": "l.location_onspd_ccg_code",
-        "location_onspd_ccg": "l.location_onspd_ccg",
-        "location_commissioning_ccg_code": "l.location_commissioning_ccg_code",
-        "location_commissioning_ccg": "l.location_commissioning_ccg",
-        "location_street_address": "l.location_street_address",
-        "location_address_line_2": "l.location_address_line_2",
-        "location_city": "l.location_city",
-        "location_county": "l.location_county",
-        "location_postal_code": "l.location_postal_code",
-        "location_paf_id": "l.location_paf_id",
-        "location_uprn_id": "l.location_uprn_id",
-        "location_latitude": "l.location_latitude",
-        "location_longitude": "l.location_longitude",
-        "location_parliamentary_constituency": "l.location_parliamentary_constituency",
-        "location_also_known_as": "l.location_also_known_as",
-        "location_specialisms": "l.location_specialisms",
-        "location_web_address": "l.location_web_address",
-
-        # Provider information  
-        "provider_id": "p.provider_id",
-        "provider_name": "p.provider_name",
-        "provider_hsca_start_date": "p.provider_hsca_start_date",
-        "provider_companies_house_number": "p.provider_companies_house_number", 
-        "provider_charity_number": "p.provider_charity_number",
-        "provider_type_sector": "p.provider_type_sector",
-        "provider_inspection_directorate": "p.provider_inspection_directorate",
-        "provider_primary_inspection_category": "p.provider_primary_inspection_category",
-        "provider_ownership_type": "p.provider_ownership_type",
-        "provider_telephone_number": "p.provider_telephone_number",
-        "provider_web_address": "p.provider_web_address",
-        "provider_street_address": "p.provider_street_address",
-        "provider_address_line_2": "p.provider_address_line_2",
-        "provider_city": "p.provider_city",
-        "provider_county": "p.provider_county",
-        "provider_postal_code": "p.provider_postal_code",
-        "provider_paf_id": "p.provider_paf_id",
-        "provider_uprn_id": "p.provider_uprn_id",
-        "provider_local_authority": "p.provider_local_authority",
-        "provider_region": "p.provider_region",
-        "provider_nhs_region": "p.provider_nhs_region",
-        "provider_latitude": "p.provider_latitude",
-        "provider_longitude": "p.provider_longitude",
-        "provider_parliamentary_constituency": "p.provider_parliamentary_constituency",
-        "provider_nominated_individual_name": "p.provider_nominated_individual_name",
-        "provider_main_partner_name": "p.provider_main_partner_name",
-
-        # Brand information
-        "brand_name": "b.brand_name",
-
-        # Period information
-        "year": "dp.year",
-        "month": "dp.month",
-        "file_name": "dp.file_name",
-
-        # Dual registration information
-        "is_dual_registered": "CASE WHEN dr.location_id IS NOT NULL THEN true ELSE false END",
-        "dual_linked_organisation_id": "dr.linked_organisation_id",
-        "dual_relationship_type": "dr.relationship_type",
-        "dual_relationship_start_date": "dr.relationship_start_date",
-        "is_primary_in_dual": "dr.is_primary"
-    }
+    from sqlalchemy import inspect
+    from app.models import Location, Provider, LocationPeriodData, DataPeriod, Brand, DualRegistration
     
-    # Dynamically add regulated activities
+    base_columns = {}
+    inspector = inspect(db.bind)
+    
+    # Get Location table columns
+    location_columns = inspector.get_columns('locations')
+    for col in location_columns:
+        col_name = col['name']
+        base_columns[col_name] = f"l.{col_name}"
+    
+    # Get Provider table columns (excluding duplicates from Location)
+    provider_columns = inspector.get_columns('providers') 
+    for col in provider_columns:
+        col_name = col['name']
+        if col_name not in base_columns:  # Avoid duplicate provider_id
+            base_columns[col_name] = f"p.{col_name}"
+    
+    # Get LocationPeriodData columns (excluding location_id which is already in Location)
+    period_data_columns = inspector.get_columns('location_period_data')
+    for col in period_data_columns:
+        col_name = col['name']
+        if col_name not in base_columns:  # Avoid duplicates
+            base_columns[col_name] = f"lpd.{col_name}"
+    
+    # Get DataPeriod columns (excluding period_id which is internal)
+    data_period_columns = inspector.get_columns('data_periods')
+    for col in data_period_columns:
+        col_name = col['name']
+        if col_name not in base_columns and col_name != 'period_id':
+            base_columns[col_name] = f"dp.{col_name}"
+    
+    # Get Brand columns (excluding brand_id which is internal)
+    brand_columns = inspector.get_columns('brands')
+    for col in brand_columns:
+        col_name = col['name']
+        if col_name not in base_columns and col_name != 'brand_id':
+            base_columns[col_name] = f"b.{col_name}"
+    
+    # Get DualRegistration columns with computed is_dual_registered
+    base_columns["is_dual_registered"] = "CASE WHEN dr.location_id IS NOT NULL THEN true ELSE false END"
+    dual_reg_columns = inspector.get_columns('dual_registrations')
+    for col in dual_reg_columns:
+        col_name = col['name']
+        if col_name not in base_columns and col_name not in ['location_id', 'period_id']:
+            # Prefix dual registration columns to avoid conflicts
+            base_columns[f"dual_{col_name}"] = f"dr.{col_name}"
+    
+    # Dynamically add regulated activities - use original CSV column names
     activities = db.query(RegulatedActivity).all()
     for activity in activities:
-        # Create a safe column name from the full activity name
-        safe_name = activity.activity_name.lower().replace(' ', '_').replace('-', '_').replace('/', '_').replace('(', '').replace(')', '').replace(',', '').replace('.', '').replace("'", '').replace('"', '')
+        # Use the original column name exactly as it appears in CSV
+        original_column_name = activity.activity_name
         # Use EXISTS subquery to check if location has this activity for the current period
-        base_columns[f"has_activity_{safe_name}"] = f"EXISTS (SELECT 1 FROM location_regulated_activities lra WHERE lra.location_id = l.location_id AND lra.activity_id = {activity.activity_id} AND lra.period_id = lpd.period_id)"
+        base_columns[original_column_name] = f"EXISTS (SELECT 1 FROM location_regulated_activities lra WHERE lra.location_id = l.location_id AND lra.activity_id = {activity.activity_id} AND lra.period_id = lpd.period_id)"
     
-    # Dynamically add service types
+    # Dynamically add service types - use original CSV column names
     service_types = db.query(ServiceType).all()
     for service_type in service_types:
-        # Create a safe column name from the full service type name
-        safe_name = service_type.service_type_name.lower().replace(' ', '_').replace('-', '_').replace('/', '_').replace('(', '').replace(')', '').replace(',', '').replace('.', '').replace("'", '').replace('"', '')
+        # Use the original column name exactly as it appears in CSV
+        original_column_name = service_type.service_type_name
         # Use EXISTS subquery to check if location has this service type for the current period
-        base_columns[f"has_service_{safe_name}"] = f"EXISTS (SELECT 1 FROM location_service_types lst WHERE lst.location_id = l.location_id AND lst.service_type_id = {service_type.service_type_id} AND lst.period_id = lpd.period_id)"
+        base_columns[original_column_name] = f"EXISTS (SELECT 1 FROM location_service_types lst WHERE lst.location_id = l.location_id AND lst.service_type_id = {service_type.service_type_id} AND lst.period_id = lpd.period_id)"
     
-    # Dynamically add service user bands
+    # Dynamically add service user bands - use original CSV column names
     user_bands = db.query(ServiceUserBand).all()
     for band in user_bands:
-        # Create a safe column name from the full band name
-        safe_name = band.band_name.lower().replace(' ', '_').replace('-', '_').replace('/', '_').replace('(', '').replace(')', '').replace(',', '').replace('.', '').replace("'", '').replace('"', '')
+        # Use the original column name exactly as it appears in CSV
+        original_column_name = band.band_name
         # Use EXISTS subquery to check if location has this user band for the current period
-        base_columns[f"has_band_{safe_name}"] = f"EXISTS (SELECT 1 FROM location_service_user_bands lsub WHERE lsub.location_id = l.location_id AND lsub.band_id = {band.band_id} AND lsub.period_id = lpd.period_id)"
+        base_columns[original_column_name] = f"EXISTS (SELECT 1 FROM location_service_user_bands lsub WHERE lsub.location_id = l.location_id AND lsub.band_id = {band.band_id} AND lsub.period_id = lpd.period_id)"
     
     return base_columns
 
@@ -312,8 +332,8 @@ def filter_cqc_data(
     """
     
     try:
-        # Get dynamic columns based on current database state
-        AVAILABLE_COLUMNS = get_dynamic_available_columns(db)
+        # Get mapping from API column names (underscore format) to SQL expressions
+        AVAILABLE_COLUMNS = get_api_to_sql_mapping(db)
     except Exception as e:
         logger.error(f"Error getting dynamic columns: {e}")
         # Create minimal fallback with only basic non-boolean columns if dynamic fails
@@ -344,7 +364,7 @@ def filter_cqc_data(
                 json_filters = json.loads(filters)
                 for filter_data in json_filters:
                     filter_cond = FilterCondition(**filter_data)
-                    condition = build_filter_condition(filter_cond, params, param_counter)
+                    condition = build_filter_condition(filter_cond, params, param_counter, AVAILABLE_COLUMNS)
                     where_conditions.append(condition)
                     param_counter += 1
             except json.JSONDecodeError:
@@ -435,6 +455,9 @@ def filter_cqc_data(
         else:
             order_clause = "ORDER BY l.location_id ASC"
 
+        # Build mapping from SQL aliases to API keys for response transformation
+        alias_to_api_key = {}
+        
         # Handle field selection (projection)
         if fields:
             requested_columns = [col.strip() for col in fields.split(",")]
@@ -446,12 +469,20 @@ def filter_cqc_data(
                     detail=f"Invalid columns requested: {', '.join(invalid_columns)}"
                 )
 
-            # Build select clause with only requested columns
-            select_columns = [f"{AVAILABLE_COLUMNS[col]} as {col}" for col in requested_columns]
+            # Build select clause with short aliases for requested columns
+            select_columns = []
+            for i, col in enumerate(requested_columns):
+                sql_alias = create_sql_alias(col, i)
+                select_columns.append(f"{AVAILABLE_COLUMNS[col]} as \"{sql_alias}\"")
+                alias_to_api_key[sql_alias] = col
             select_clause = ", ".join(select_columns)
         else:
-            # Default to all columns
-            select_columns = [f"{expr} as {col}" for col, expr in AVAILABLE_COLUMNS.items()]
+            # Default to all columns with short aliases
+            select_columns = []
+            for i, (col, expr) in enumerate(AVAILABLE_COLUMNS.items()):
+                sql_alias = create_sql_alias(col, i)
+                select_columns.append(f"{expr} as \"{sql_alias}\"")
+                alias_to_api_key[sql_alias] = col
             select_clause = ", ".join(select_columns)
 
         # Build complete query with dynamic SELECT
@@ -493,8 +524,15 @@ def filter_cqc_data(
         count_params = {k: v for k, v in params.items() if k not in ['limit', 'offset']}
         total_count = db.execute(count_query, count_params).fetchone()[0]
 
-        # Convert results to dictionaries
-        data = [dict(row._mapping) for row in results]
+        # Convert results to dictionaries using the alias mapping
+        data = []
+        for row in results:
+            row_dict = {}
+            for sql_alias, value in row._mapping.items():
+                # Map SQL alias back to full API key
+                api_key = alias_to_api_key.get(sql_alias, sql_alias)
+                row_dict[api_key] = value
+            data.append(row_dict)
 
         return {
             "status": "success",
@@ -528,30 +566,48 @@ def get_available_columns(db: Session = Depends(get_db)) -> Dict[str, Any]:
         # Get dynamic columns from database
         available_columns = get_dynamic_available_columns(db)
         
+        # Convert column names to API format (underscore separated)
+        api_columns = {convert_to_api_key(col): col for col in available_columns.keys()}
+        
+        # Create dynamic categories based on API column names
+        categories = {
+            "location_info": [col for col in api_columns.keys() if col.startswith("location_")],
+            "provider_info": [col for col in api_columns.keys() if col.startswith("provider_")],
+            "regulated_activities": [col for col in api_columns.keys() if col.startswith("regulated_activity")],
+            "service_types": [col for col in api_columns.keys() if col.startswith("service_type")],
+            "service_user_bands": [col for col in api_columns.keys() if col.startswith("service_user_band")],
+            "dual_registrations": [col for col in api_columns.keys() if col.startswith("dual_") or col == "is_dual_registered"],
+            "brands": [col for col in api_columns.keys() if col.startswith("brand_")],
+            "period_info": [col for col in api_columns.keys() if col in ["year", "month", "file_name"]],
+            "other": [col for col in api_columns.keys() if not any([
+                col.startswith("location_"),
+                col.startswith("provider_"), 
+                col.startswith("regulated_activity"),
+                col.startswith("service_type"),
+                col.startswith("service_user_band"),
+                col.startswith("dual_"),
+                col.startswith("brand_"),
+                col in ["year", "month", "file_name", "is_dual_registered"]
+            ])]
+        }
+        
+        # Get first example of each category for dynamic examples
+        examples = {}
+        if categories["regulated_activities"]:
+            examples["filter_by_activity"] = f'filters=[{{"column":"{categories["regulated_activities"][0]}","value":true,"operator":"equals"}}]'
+        if categories["service_types"]:
+            examples["filter_by_service"] = f'filters=[{{"column":"{categories["service_types"][0]}","value":true,"operator":"equals"}}]'
+        if categories["service_user_bands"]:
+            examples["filter_by_user_band"] = f'filters=[{{"column":"{categories["service_user_bands"][0]}","value":true,"operator":"equals"}}]'
+        if categories["location_info"]:
+            location_col = next((col for col in categories["location_info"] if "city" in col.lower()), categories["location_info"][0])
+            examples["filter_by_location"] = f'filters=[{{"column":"{location_col}","value":"London","operator":"equals"}}]'
+        
         return {
-            "available_columns": list(available_columns.keys()),
-            "total_columns": len(available_columns),
-            "categories": {
-                "location_info": [col for col in available_columns.keys() if col.startswith("location_")],
-                "provider_info": [col for col in available_columns.keys() if col.startswith("provider_")],
-                "regulated_activities": [col for col in available_columns.keys() if col.startswith("has_activity_")],
-                "service_types": [col for col in available_columns.keys() if col.startswith("has_service_")],
-                "service_user_bands": [col for col in available_columns.keys() if col.startswith("has_band_")],
-                "period_info": [col for col in available_columns.keys() if col in ["year", "month", "file_name"]],
-                "ratings_and_status": [col for col in available_columns.keys() if col in [
-                    "latest_overall_rating", "publication_date", "is_inherited_rating", 
-                    "is_dormant", "is_care_home", "care_homes_beds"
-                ]],
-                "dual_registrations": [col for col in available_columns.keys() if col.startswith("dual_") or col == "is_dual_registered"],
-                "brands": [col for col in available_columns.keys() if col.startswith("brand_")]
-            },
-            "examples": {
-                "filter_by_activity": "has_activity_accommodation_for_persons_who_require_nursing_or_personal_care=true",
-                "filter_by_service": "has_service_care_home_service_with_nursing=true", 
-                "filter_by_user_band": "has_band_older_people=true",
-                "filter_by_location": "location_city=London",
-                "filter_by_rating": "latest_overall_rating=Outstanding"
-            }
+            "available_columns": list(api_columns.keys()),
+            "total_columns": len(api_columns),
+            "categories": categories,
+            "examples": examples
         }
     except Exception as e:
         logger.error(f"Error getting available columns: {e}")
@@ -572,43 +628,46 @@ def get_available_boolean_filters(db: Session = Depends(get_db)) -> Dict[str, An
             "usage_examples": []
         }
         
-        # Get all regulated activities
+        # Get all regulated activities - use API column names (underscore format)
         activities = db.query(RegulatedActivity).all()
         for activity in activities:
-            safe_name = activity.activity_name.lower().replace(' ', '_').replace('-', '_').replace('/', '_').replace('(', '').replace(')', '').replace(',', '').replace('.', '').replace("'", '').replace('"', '')
+            original_column_name = activity.activity_name
+            api_column_name = convert_to_api_key(original_column_name)
             result["regulated_activities"].append({
                 "full_name": activity.activity_name,
-                "filter_column": f"has_activity_{safe_name}",
-                "example_usage": f"has_activity_{safe_name}=true"
+                "filter_column": api_column_name,
+                "example_usage": f'filters=[{{"column":"{api_column_name}","value":true,"operator":"equals"}}]'
             })
         
-        # Get all service types
+        # Get all service types - use API column names (underscore format)
         service_types = db.query(ServiceType).all()
         for service_type in service_types:
-            safe_name = service_type.service_type_name.lower().replace(' ', '_').replace('-', '_').replace('/', '_').replace('(', '').replace(')', '').replace(',', '').replace('.', '').replace("'", '').replace('"', '')
+            original_column_name = service_type.service_type_name
+            api_column_name = convert_to_api_key(original_column_name)
             result["service_types"].append({
                 "full_name": service_type.service_type_name,
-                "filter_column": f"has_service_{safe_name}",
-                "example_usage": f"has_service_{safe_name}=true"
+                "filter_column": api_column_name,
+                "example_usage": f'filters=[{{"column":"{api_column_name}","value":true,"operator":"equals"}}]'
             })
         
-        # Get all service user bands
+        # Get all service user bands - use API column names (underscore format)
         user_bands = db.query(ServiceUserBand).all()
         for band in user_bands:
-            safe_name = band.band_name.lower().replace(' ', '_').replace('-', '_').replace('/', '_').replace('(', '').replace(')', '').replace(',', '').replace('.', '').replace("'", '').replace('"', '')
+            original_column_name = band.band_name
+            api_column_name = convert_to_api_key(original_column_name)
             result["service_user_bands"].append({
                 "full_name": band.band_name,
-                "filter_column": f"has_band_{safe_name}",
-                "example_usage": f"has_band_{safe_name}=true"
+                "filter_column": api_column_name,
+                "example_usage": f'filters=[{{"column":"{api_column_name}","value":true,"operator":"equals"}}]'
             })
         
         # Add usage examples
         if result["regulated_activities"]:
-            result["usage_examples"].append(f"Filter for nursing care: {result['regulated_activities'][0]['example_usage']}")
+            result["usage_examples"].append(f"Filter for activities: {result['regulated_activities'][0]['example_usage']}")
         if result["service_types"]:
-            result["usage_examples"].append(f"Filter for specific services: {result['service_types'][0]['example_usage']}")
+            result["usage_examples"].append(f"Filter for services: {result['service_types'][0]['example_usage']}")
         if result["service_user_bands"]:
-            result["usage_examples"].append(f"Filter for user demographics: {result['service_user_bands'][0]['example_usage']}")
+            result["usage_examples"].append(f"Filter for user bands: {result['service_user_bands'][0]['example_usage']}")
         
         result["summary"] = {
             "total_regulated_activities": len(result["regulated_activities"]),

@@ -13,7 +13,7 @@ from app.models.regulated_activity import RegulatedActivity, LocationRegulatedAc
 from app.models.service_type import ServiceType, LocationServiceType
 from app.models.service_user_band import ServiceUserBand, LocationServiceUserBand
 from app.models.data_period import DataPeriod
-from app.models.location_activity_flags import LocationActivityFlags
+# LocationActivityFlags import removed - table no longer used
 from app.models.dual_registration import DualRegistration
 from app.models.provider_brand import ProviderBrand
 
@@ -28,7 +28,6 @@ class CQCDataImporter:
             "providers_created": 0,
             "locations_created": 0,
             "location_period_data_created": 0,
-            "location_activity_flags_created": 0,
             "activities_created": 0,
             "service_types_created": 0,
             "user_bands_created": 0,
@@ -609,107 +608,11 @@ class CQCDataImporter:
             ).first()
 
 
-    def create_location_activity_flags(self, location: Location, row: pd.Series, data_period: DataPeriod) -> Optional[LocationActivityFlags]:
-        """Create activity flags for a location in a specific period"""
-        # Check if flags already exist
-        existing_flags = self.db.query(LocationActivityFlags).filter(
-            LocationActivityFlags.location_id == location.location_id,
-            LocationActivityFlags.period_id == data_period.period_id
-        ).first()
-        
-        if existing_flags:
-            return existing_flags
-        
-        # Create new activity flags record
-        activity_flags = LocationActivityFlags(
-            location_id=location.location_id,
-            period_id=data_period.period_id,
-            
-            # Regulated Activities - Complete mapping
-            accommodation_nursing_personal_care=self.parse_boolean_field(row.get('Regulated activity - Accommodation for persons who require nursing or personal care')),
-            treatment_disease_disorder_injury=self.parse_boolean_field(row.get('Regulated activity - Treatment of disease, disorder or injury')),
-            assessment_medical_treatment=self.parse_boolean_field(row.get('Regulated activity - Assessment or medical treatment for persons detained under the Mental Health Act 1983')),
-            surgical_procedures=self.parse_boolean_field(row.get('Regulated activity - Surgical procedures')),
-            diagnostic_screening=self.parse_boolean_field(row.get('Regulated activity - Diagnostic and screening procedures')),
-            management_supply_blood=self.parse_boolean_field(row.get('Regulated activity - Management of supply of blood and blood derived products')),
-            transport_services=self.parse_boolean_field(row.get('Regulated activity - Transport services, triage and medical advice provided remotely')),
-            maternity_midwifery=self.parse_boolean_field(row.get('Regulated activity - Maternity and midwifery services')),
-            termination_pregnancies=self.parse_boolean_field(row.get('Regulated activity - Termination of pregnancies')),
-            services_slimming=self.parse_boolean_field(row.get('Regulated activity - Services in slimming clinics')),
-            nursing_care=self.parse_boolean_field(row.get('Regulated activity - Nursing care')),
-            personal_care=self.parse_boolean_field(row.get('Regulated activity - Personal care')),
-            accommodation_persons_detoxification=self.parse_boolean_field(row.get('Regulated activity - Accommodation for persons who require treatment for substance misuse')),
-            family_planning=self.parse_boolean_field(row.get('Regulated activity - Family planning')),
-            
-            # Service Types - Complete mapping from CQC data
-            acute_services_with_overnight_beds=self.parse_boolean_field(row.get('Service type - Acute services with overnight beds')),
-            acute_services_without_overnight_beds=self.parse_boolean_field(row.get('Service type - Acute services without overnight beds / listed acute services with or without overnight beds')),
-            ambulance_service=self.parse_boolean_field(row.get('Service type - Ambulance service')),
-            blood_and_transplant_service=self.parse_boolean_field(row.get('Service type - Blood and Transplant service')),
-            care_home_nursing=self.parse_boolean_field(row.get('Service type - Care home service with nursing')),
-            care_home_without_nursing=self.parse_boolean_field(row.get('Service type - Care home service without nursing')),
-            community_based_services_substance_misuse=self.parse_boolean_field(row.get('Service type - Community based services for people who misuse substances')),
-            community_based_services_learning_disability=self.parse_boolean_field(row.get('Service type - Community based services for people with a learning disability')),
-            community_based_services_mental_health=self.parse_boolean_field(row.get('Service type - Community based services for people with mental health needs')),
-            community_health_care_independent_midwives=self.parse_boolean_field(row.get('Service type - Community health care services - Independent Midwives')),
-            community_health_care_nurses_agency=self.parse_boolean_field(row.get('Service type - Community health care services - Nurses Agency only')),
-            community_health_care=self.parse_boolean_field(row.get('Service type - Community healthcare service')),
-            dental_service=self.parse_boolean_field(row.get('Service type - Dental service')),
-            diagnostic_screening_service=self.parse_boolean_field(row.get('Service type - Diagnostic and/or screening service')),
-            diagnostic_screening_single_handed_sessional=self.parse_boolean_field(row.get('Service type - Diagnostic and/or screening service - single handed sessional providers')),
-            doctors_consultation=self.parse_boolean_field(row.get('Service type - Doctors consultation service')),
-            doctors_treatment=self.parse_boolean_field(row.get('Service type - Doctors treatment service')),
-            domiciliary_care=self.parse_boolean_field(row.get('Service type - Domiciliary care service')),
-            extra_care_housing=self.parse_boolean_field(row.get('Service type - Extra Care housing services')),
-            hospice_services=self.parse_boolean_field(row.get('Service type - Hospice services')),
-            hospice_services_at_home=self.parse_boolean_field(row.get('Service type - Hospice services at home')),
-            hospital_services_mental_health_learning_disabilities=self.parse_boolean_field(row.get('Service type - Hospital services for people with mental health needs, learning disabilities and problems with substance misuse')),
-            hospital_services_acute=self.parse_boolean_field(row.get('Service type - Hospital services for people detained under the Mental Health Act')),
-            hyperbaric_chamber=self.parse_boolean_field(row.get('Service type - Hyperbaric Chamber')),
-            long_term_conditions=self.parse_boolean_field(row.get('Service type - Long term conditions services')),
-            mobile_doctors=self.parse_boolean_field(row.get('Service type - Mobile doctors service')),
-            prison_healthcare=self.parse_boolean_field(row.get('Service type - Prison Healthcare Services')),
-            rehabilitation_services=self.parse_boolean_field(row.get('Service type - Rehabilitation services')),
-            remote_clinical_advice=self.parse_boolean_field(row.get('Service type - Remote clinical advice service')),
-            residential_substance_misuse_treatment=self.parse_boolean_field(row.get('Service type - Residential substance misuse treatment and/or rehabilitation service')),
-            shared_lives=self.parse_boolean_field(row.get('Service type - Shared Lives')),
-            specialist_college=self.parse_boolean_field(row.get('Service type - Specialist college service')),
-            supported_living=self.parse_boolean_field(row.get('Service type - Supported living service')),
-            urgent_care=self.parse_boolean_field(row.get('Service type - Urgent care services')),
-            
-            # Service User Bands - Complete mapping from CQC data
-            children_0_18_years=self.parse_boolean_field(row.get('Service user band - Children 0-18 years')),
-            dementia=self.parse_boolean_field(row.get('Service user band - Dementia')),
-            learning_disabilities_autistic=self.parse_boolean_field(row.get('Service user band - Learning disabilities or autistic spectrum disorder')),
-            mental_health_needs=self.parse_boolean_field(row.get('Service user band - Mental Health')),
-            older_people_65_plus=self.parse_boolean_field(row.get('Service user band - Older People')),
-            people_detained_mental_health_act=self.parse_boolean_field(row.get('Service user band - People detained under the Mental Health Act')),
-            people_who_misuse_drugs_alcohol=self.parse_boolean_field(row.get('Service user band - People who misuse drugs and alcohol')),
-            people_with_eating_disorder=self.parse_boolean_field(row.get('Service user band - People with an eating disorder')),
-            physical_disability=self.parse_boolean_field(row.get('Service user band - Physical Disability')),
-            sensory_impairment=self.parse_boolean_field(row.get('Service user band - Sensory Impairment')),
-            whole_population=self.parse_boolean_field(row.get('Service user band - Whole Population')),
-            younger_adults=self.parse_boolean_field(row.get('Service user band - Younger Adults')),
-            
-            # Legacy backward compatibility fields
-            children_0_3_years=False,  # Map to children_0_18_years for compatibility
-            children_4_12_years=False,  # Map to children_0_18_years for compatibility  
-            children_13_18_years=False,  # Map to children_0_18_years for compatibility
-            adults_18_65_years=self.parse_boolean_field(row.get('Service user band - Younger Adults')),  # Map to younger_adults
-        )
-        
-        try:
-            self.db.add(activity_flags)
-            self.db.commit()
-            self.stats["location_activity_flags_created"] += 1
-            return activity_flags
-        except IntegrityError as e:
-            self.db.rollback()
-            self.stats["errors"].append(f"Location activity flags {location.location_id}-{data_period.period_id}: {str(e)}")
-            return self.db.query(LocationActivityFlags).filter(
-                LocationActivityFlags.location_id == location.location_id,
-                LocationActivityFlags.period_id == data_period.period_id
-            ).first()
+    # create_location_activity_flags function REMOVED - no longer needed
+    # Boolean data now stored in normalized association tables:
+    # - location_regulated_activities 
+    # - location_service_types
+    # - location_service_user_bands
 
     def create_provider_brand_relationship(self, provider: Provider, brand: Brand, data_period: DataPeriod) -> Optional[ProviderBrand]:
         """Create provider-brand relationship for a specific period"""
@@ -807,8 +710,7 @@ class CQCDataImporter:
                     if not period_data:
                         continue
                     
-                    # Create activity flags for this period (keep for reconstruction compatibility)
-                    activity_flags = self.create_location_activity_flags(location, row, data_period)
+                    # Note: LocationActivityFlags table no longer used - data now in association tables
                     
                     # Create dynamic associations based on discovered columns
                     self.create_dynamic_associations(location, row, data_period, lookup_mappings)
@@ -1150,8 +1052,7 @@ class CQCDataImporter:
                             logger.warning(f"      ⚠️  Skipped record {current_record}: no period data created")
                         continue
                     
-                    # Create activity flags for this period (keep for reconstruction compatibility)
-                    activity_flags = self.create_location_activity_flags(location, row, data_period)
+                    # Note: LocationActivityFlags table no longer used - data now in association tables
                     
                     # Create dynamic associations based on discovered columns
                     self.create_dynamic_associations(location, row, data_period, lookup_mappings)
