@@ -7,6 +7,8 @@ from .regulated_activity import RegulatedActivity, LocationRegulatedActivity
 from .service_type import ServiceType, LocationServiceType
 from .service_user_band import ServiceUserBand, LocationServiceUserBand
 from .data_period import DataPeriod
+from .dual_registration import DualRegistration
+from .provider_brand import ProviderBrand
 
 __all__ = [
     "Brand",
@@ -20,5 +22,7 @@ __all__ = [
     "LocationServiceType", 
     "ServiceUserBand",
     "LocationServiceUserBand",
-    "DataPeriod"
+    "DataPeriod",
+    "DualRegistration",
+    "ProviderBrand"
 ]

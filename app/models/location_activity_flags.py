@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Integer, ForeignKey, Boolean, UniqueConstraint
+from sqlalchemy import Column, BigInteger, String, ForeignKey, Boolean, UniqueConstraint
 from sqlalchemy.orm import relationship
 from app.core.database import Base
 
@@ -10,9 +10,9 @@ class LocationActivityFlags(Base):
     """
     __tablename__ = "location_activity_flags"
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    location_id = Column(String(20), ForeignKey("locations.location_id"), nullable=False)
-    period_id = Column(Integer, ForeignKey("data_periods.period_id"), nullable=False)
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    location_id = Column(String, ForeignKey("locations.location_id"), nullable=False)
+    period_id = Column(BigInteger, ForeignKey("data_periods.period_id"), nullable=False)
     
     # Regulated Activities (Y/N flags)
     accommodation_nursing_personal_care = Column(Boolean, default=False)
@@ -93,5 +93,5 @@ class LocationActivityFlags(Base):
     )
 
     # Relationships  
-    location = relationship("Location")
-    data_period = relationship("DataPeriod")
+    location = relationship("Location", back_populates="activity_flags")
+    data_period = relationship("DataPeriod", back_populates="location_activity_flags")

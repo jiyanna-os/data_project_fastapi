@@ -308,15 +308,21 @@ def get_import_status(db: Session = Depends(get_db)) -> Dict[str, Any]:
     from app.models.brand import Brand
     from app.models.provider import Provider
     from app.models.location import Location
+    from app.models.location_period_data import LocationPeriodData
+    from app.models.location_activity_flags import LocationActivityFlags
     from app.models.regulated_activity import RegulatedActivity
     from app.models.service_type import ServiceType
     from app.models.service_user_band import ServiceUserBand
+    from app.models.data_period import DataPeriod
     
     try:
         stats = {
             "brands": db.query(Brand).count(),
             "providers": db.query(Provider).count(),
             "locations": db.query(Location).count(),
+            "location_period_data": db.query(LocationPeriodData).count(),
+            "location_activity_flags": db.query(LocationActivityFlags).count(),
+            "data_periods": db.query(DataPeriod).count(),
             "regulated_activities": db.query(RegulatedActivity).count(),
             "service_types": db.query(ServiceType).count(),
             "service_user_bands": db.query(ServiceUserBand).count()
@@ -326,7 +332,7 @@ def get_import_status(db: Session = Depends(get_db)) -> Dict[str, Any]:
             "status": "success",
             "database_statistics": stats
         }
-        
+
     except Exception as e:
         logger.error(f"Failed to get statistics: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to get statistics: {str(e)}")
@@ -423,9 +429,10 @@ def get_data_periods(db: Session = Depends(get_db)) -> Dict[str, Any]:
         
         period_list = []
         for period in periods:
-            # Count locations in this period
-            location_count = db.query(Location).filter(
-                Location.period_id == period.period_id
+            # Count locations in this period via LocationPeriodData
+            from app.models.location_period_data import LocationPeriodData
+            location_count = db.query(LocationPeriodData).filter(
+                LocationPeriodData.period_id == period.period_id
             ).count()
             
             period_list.append({
@@ -522,26 +529,29 @@ def list_available_files() -> Dict[str, Any]:
 
 @router.get("/location-history/{location_id}")
 def get_location_history(
-    location_id: str,
+    location_id: int,
     db: Session = Depends(get_db)
 ) -> Dict[str, Any]:
     """Get historical data for a specific location across all periods"""
     try:
         from app.models.data_period import DataPeriod
         from app.models.location import Location
+        from app.models.location_period_data import LocationPeriodData
         
-        # Get all instances of this location across different periods
-        locations = db.query(Location, DataPeriod).join(
-            DataPeriod, Location.period_id == DataPeriod.period_id
-        ).filter(
-            Location.location_id == location_id
-        ).order_by(DataPeriod.year.desc(), DataPeriod.month.desc()).all()
-        
-        if not locations:
+        # First, get the static location info
+        location = db.query(Location).filter(Location.location_id == location_id).first()
+        if not location:
             raise HTTPException(status_code=404, detail="Location not found")
         
+        # Get all historical period data for this location
+        period_data = db.query(LocationPeriodData, DataPeriod).join(
+            DataPeriod, LocationPeriodData.period_id == DataPeriod.period_id
+        ).filter(
+            LocationPeriodData.location_id == location_id
+        ).order_by(DataPeriod.year.desc(), DataPeriod.month.desc()).all()
+        
         history_list = []
-        for location, period in locations:
+        for lpd, period in period_data:
             history_list.append({
                 "year": period.year,
                 "month": period.month,
@@ -549,13 +559,13 @@ def get_location_history(
                               "July", "August", "September", "October", "November", "December"][period.month],
                 "file_name": period.file_name,
                 "location_name": location.location_name,
-                "latest_overall_rating": location.latest_overall_rating,
-                "is_dormant": location.is_dormant,
-                "is_care_home": location.is_care_home,
-                "care_homes_beds": location.care_homes_beds,
+                "latest_overall_rating": lpd.latest_overall_rating,
+                "is_dormant": lpd.is_dormant,
+                "is_care_home": lpd.is_care_home,
+                "care_homes_beds": lpd.care_homes_beds,
                 "provider_id": location.provider_id,
-                "region": location.region,
-                "local_authority": location.local_authority
+                "location_region": location.location_region,
+                "location_local_authority": location.location_local_authority
             })
         
         return {

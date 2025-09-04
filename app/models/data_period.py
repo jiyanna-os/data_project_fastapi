@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Integer, DateTime, UniqueConstraint
+from sqlalchemy import Column, String, Integer, BigInteger, DateTime, UniqueConstraint
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.core.database import Base
@@ -7,10 +7,10 @@ from app.core.database import Base
 class DataPeriod(Base):
     __tablename__ = "data_periods"
 
-    period_id = Column(Integer, primary_key=True, autoincrement=True)
+    period_id = Column(BigInteger, primary_key=True, autoincrement=True)
     year = Column(Integer, nullable=False)
     month = Column(Integer, nullable=False)  # 1-12
-    file_name = Column(String(255))
+    file_name = Column(String)
     created_at = Column(DateTime, default=func.now())
     
     # Ensure unique year/month combinations
@@ -20,3 +20,9 @@ class DataPeriod(Base):
 
     # Relationships
     location_data = relationship("LocationPeriodData", back_populates="data_period")
+    location_activity_flags = relationship("LocationActivityFlags", back_populates="data_period")
+    location_regulated_activities = relationship("LocationRegulatedActivity", back_populates="data_period")
+    location_service_types = relationship("LocationServiceType", back_populates="data_period")
+    location_service_user_bands = relationship("LocationServiceUserBand", back_populates="data_period")
+    dual_registrations = relationship("DualRegistration", back_populates="data_period")
+    provider_brands = relationship("ProviderBrand", back_populates="data_period")

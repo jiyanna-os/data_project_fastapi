@@ -15,6 +15,7 @@ from app.models.service_user_band import ServiceUserBand, LocationServiceUserBan
 from app.models.data_period import DataPeriod
 from app.models.location_activity_flags import LocationActivityFlags
 from app.models.dual_registration import DualRegistration
+from app.models.provider_brand import ProviderBrand
 
 logger = logging.getLogger(__name__)
 
@@ -129,15 +130,24 @@ class CQCDataImporter:
         # Handle numeric values (Excel serial dates)
         elif isinstance(date_str, (int, float)):
             try:
-                # Excel epoch starts from 1900-01-01 (with 1900 leap year bug)
-                # Excel serial 1 = 1900-01-01, but we need to account for the bug
-                if date_str > 59:  # After Feb 28, 1900
-                    excel_date = datetime(1899, 12, 30) + pd.Timedelta(days=date_str)
+                # Convert to int if it's a float representing a whole number
+                if isinstance(date_str, float) and date_str.is_integer():
+                    date_str = int(date_str)
+                
+                # Excel stores dates as numbers since January 1, 1900
+                # Handle common Excel date ranges (1900-2100) - serial dates 1 to 73050
+                if 1 <= date_str <= 73050:
+                    # Account for Excel leap year bug (1900 was not a leap year)
+                    if date_str > 59:  # After Feb 28, 1900
+                        excel_date = datetime(1899, 12, 30) + pd.Timedelta(days=date_str)
+                    else:
+                        excel_date = datetime(1899, 12, 31) + pd.Timedelta(days=date_str - 1)
+                    return excel_date.date()
                 else:
-                    excel_date = datetime(1899, 12, 31) + pd.Timedelta(days=date_str - 1)
-                return excel_date.date()
-            except:
-                logger.warning(f"Could not parse numeric date: {date_str}")
+                    logger.warning(f"Excel date serial number out of reasonable range: {date_str}")
+                    return None
+            except Exception as e:
+                logger.warning(f"Could not parse numeric date: {date_str} - {str(e)}")
                 return None
                 
         # Unknown type
@@ -235,6 +245,133 @@ class CQCDataImporter:
             logger.warning(f"Could not parse categorical numeric: {value} - {str(e)}")
             return str(value).strip() if value else None
 
+    def parse_primary_key(self, value, field_name: str = "") -> Optional[str]:
+        """Parse primary key fields - return None for invalid values like * or -"""
+        if pd.isna(value) or value == '' or value == '*' or value == '-':
+            return None
+            
+        try:
+            # Convert to string and clean
+            str_value = str(value).strip()
+            if not str_value or str_value in ['*', '-', 'nan', 'None']:
+                return None
+                
+            # Handle scientific notation from Excel
+            if 'e+' in str_value.lower() or 'e-' in str_value.lower():
+                try:
+                    float_val = float(str_value)
+                    if float_val == int(float_val):
+                        str_value = str(int(float_val))
+                    else:
+                        str_value = str(float_val)
+                except:
+                    pass
+            
+            # Remove trailing decimals if they're just .0
+            if str_value.endswith('.0'):
+                str_value = str_value[:-2]
+                
+            return str_value if str_value else None
+            
+        except Exception as e:
+            logger.warning(f"Could not parse primary key {field_name}: {value} - {str(e)}")
+            return None
+
+    def parse_string_field(self, value, preserve_special: bool = True) -> Optional[str]:
+        """Parse string fields - preserve * and - if preserve_special=True"""
+        if pd.isna(value) or value == '':
+            return None
+            
+        try:
+            str_value = str(value).strip()
+            if not str_value:
+                return None
+                
+            # For string fields, we preserve special characters unless specified otherwise
+            if not preserve_special and str_value in ['*', '-']:
+                return None
+                
+            # Handle scientific notation from Excel for string fields that might contain numbers
+            if 'e+' in str_value.lower() or 'e-' in str_value.lower():
+                try:
+                    float_val = float(str_value)
+                    if float_val == int(float_val):
+                        str_value = str(int(float_val))
+                    else:
+                        str_value = str(float_val)
+                except:
+                    pass  # Keep as string if conversion fails
+            
+            # Remove trailing .0 for string fields that look like numbers
+            if str_value.endswith('.0') and str_value[:-2].replace('.', '').replace('-', '').isdigit():
+                str_value = str_value[:-2]
+                
+            return str_value
+            
+        except Exception as e:
+            logger.warning(f"Could not parse string field: {value} - {str(e)}")
+            return str(value) if value else None
+
+    def parse_numeric_field(self, value, allow_null_indicators: bool = True) -> Optional[int]:
+        """Parse numeric fields - return None for * and - if allow_null_indicators=True"""
+        if pd.isna(value) or value == '':
+            return None
+            
+        if allow_null_indicators and str(value).strip() in ['*', '-']:
+            return None
+            
+        try:
+            # Handle scientific notation and large numbers
+            if isinstance(value, str) and ('e+' in value.lower() or 'e-' in value.lower()):
+                num = float(value)
+            else:
+                num = float(value)
+                
+            # Check for reasonable integer range
+            if num > 9223372036854775807:  # Max BigInt value
+                logger.warning(f"Numeric value too large: {value}")
+                return None
+                
+            return int(num) if num == int(num) else None
+        except Exception as e:
+            logger.warning(f"Could not parse numeric field: {value} - {str(e)}")
+            return None
+
+    def parse_decimal_field(self, value, allow_null_indicators: bool = True) -> Optional[float]:
+        """Parse decimal fields - return None for * and - if allow_null_indicators=True"""
+        if pd.isna(value) or value == '':
+            return None
+            
+        if allow_null_indicators and str(value).strip() in ['*', '-']:
+            return None
+            
+        try:
+            return float(value)
+        except Exception as e:
+            logger.warning(f"Could not parse decimal field: {value} - {str(e)}")
+            return None
+
+    def parse_boolean_field(self, value) -> Optional[bool]:
+        """Parse boolean fields with comprehensive Y/N, True/False, 1/0 support"""
+        if pd.isna(value) or value == '' or value == '*' or value == '-':
+            return None
+            
+        try:
+            str_val = str(value).strip().upper()
+            
+            # Handle Y/N format (most common in CQC data)
+            if str_val in ['Y', 'YES', '1', 'TRUE', 'T']:
+                return True
+            elif str_val in ['N', 'NO', '0', 'FALSE', 'F']:
+                return False
+            else:
+                logger.warning(f"Unrecognized boolean value: {value}")
+                return None
+                
+        except Exception as e:
+            logger.warning(f"Could not parse boolean field: {value} - {str(e)}")
+            return None
+
     def parse_telephone(self, value) -> Optional[str]:
         """Parse telephone numbers as categorical strings, preserving leading zeros"""
         if pd.isna(value) or value == '' or value == '-':
@@ -274,7 +411,7 @@ class CQCDataImporter:
             return str(value).strip() if value else None
 
     def get_or_create_brand(self, brand_id: str, brand_name: str) -> Optional[Brand]:
-        """Get existing brand or create new one"""
+        """Get existing brand by ID or create new one"""
         if not brand_id or brand_id == '-':
             return None
             
@@ -282,7 +419,7 @@ class CQCDataImporter:
         if not brand:
             brand = Brand(
                 brand_id=brand_id,
-                brand_name=brand_name or f"Brand {brand_id}"
+                brand_name=self.parse_string_field(brand_name, preserve_special=False) or f"Brand {brand_id}"
             )
             try:
                 self.db.add(brand)
@@ -294,24 +431,6 @@ class CQCDataImporter:
                 brand = self.db.query(Brand).filter(Brand.brand_id == brand_id).first()
         return brand
 
-    def get_or_create_regulated_activity(self, activity_name: str) -> RegulatedActivity:
-        """Get existing regulated activity or create new one"""
-        activity = self.db.query(RegulatedActivity).filter(
-            RegulatedActivity.activity_name == activity_name
-        ).first()
-        
-        if not activity:
-            activity = RegulatedActivity(activity_name=activity_name)
-            try:
-                self.db.add(activity)
-                self.db.commit()
-                self.stats["activities_created"] += 1
-            except IntegrityError:
-                self.db.rollback()
-                activity = self.db.query(RegulatedActivity).filter(
-                    RegulatedActivity.activity_name == activity_name
-                ).first()
-        return activity
 
     def get_or_create_data_period(self, year: int, month: int, file_name: str) -> DataPeriod:
         """Get existing data period or create new one"""
@@ -339,90 +458,49 @@ class CQCDataImporter:
                 ).first()
         return period
 
-    def get_or_create_service_type(self, service_name: str) -> ServiceType:
-        """Get existing service type or create new one"""
-        service_type = self.db.query(ServiceType).filter(
-            ServiceType.service_type_name == service_name
-        ).first()
-        
-        if not service_type:
-            service_type = ServiceType(service_type_name=service_name)
-            try:
-                self.db.add(service_type)
-                self.db.commit()
-                self.stats["service_types_created"] += 1
-            except IntegrityError:
-                self.db.rollback()
-                service_type = self.db.query(ServiceType).filter(
-                    ServiceType.service_type_name == service_name
-                ).first()
-        return service_type
 
-    def get_or_create_service_user_band(self, band_name: str) -> ServiceUserBand:
-        """Get existing service user band or create new one"""
-        band = self.db.query(ServiceUserBand).filter(
-            ServiceUserBand.band_name == band_name
-        ).first()
-        
-        if not band:
-            band = ServiceUserBand(band_name=band_name)
-            try:
-                self.db.add(band)
-                self.db.commit()
-                self.stats["user_bands_created"] += 1
-            except IntegrityError:
-                self.db.rollback()
-                band = self.db.query(ServiceUserBand).filter(
-                    ServiceUserBand.band_name == band_name
-                ).first()
-        return band
 
-    def create_provider(self, row: pd.Series) -> Optional[Provider]:
-        """Create provider from row data"""
-        provider_id = self.clean_value(row.get('Provider ID'))
+    def get_or_create_provider_by_original_id(self, row: pd.Series) -> Optional[Provider]:
+        """Get existing provider by original ID or create new one with auto-increment ID"""
+        provider_id = self.parse_primary_key(row.get('Provider ID'), 'Provider ID')
         if not provider_id:
             return None
 
-        # Check if provider already exists
-        existing_provider = self.db.query(Provider).filter(Provider.provider_id == provider_id).first()
+        # Check if provider with this original ID already exists
+        existing_provider = self.db.query(Provider).filter(
+            Provider.provider_id == provider_id
+        ).first()
         if existing_provider:
             return existing_provider
 
-        # Get or create brand
-        brand_id = self.clean_value(row.get('Brand ID'))
-        brand_name = self.clean_value(row.get('Brand Name'))
-        brand = None
-        if brand_id and brand_id != '-':
-            brand = self.get_or_create_brand(brand_id, brand_name)
 
         provider = Provider(
             provider_id=provider_id,
-            provider_name=self.clean_value(row.get('Provider Name')) or f"Provider {provider_id}",
-            brand_id=brand.brand_id if brand else None,
-            hsca_start_date=self.parse_date(row.get('Provider HSCA start date')),
-            companies_house_number=self.parse_categorical_numeric(row.get('Provider Companies House Number')),
-            charity_number=self.parse_number(row.get('Provider Charity Number')),
-            type_sector=self.clean_value(row.get('Provider Type/Sector')),
-            inspection_directorate=self.clean_value(row.get('Provider Inspection Directorate')),
-            primary_inspection_category=self.clean_value(row.get('Provider Primary Inspection Category')),
-            ownership_type=self.clean_value(row.get('Provider Ownership Type')),
-            telephone_number=self.parse_telephone(row.get('Provider Telephone Number')),
-            web_address=self.clean_value(row.get('Provider Web Address')),
-            street_address=self.clean_value(row.get('Provider Street Address')),
-            address_line_2=self.clean_value(row.get('Provider Address Line 2')),
-            city=self.clean_value(row.get('Provider City')),
-            county=self.clean_value(row.get('Provider County')),
-            postal_code=self.parse_categorical_numeric(row.get('Provider Postal Code')),
-            paf_id=self.parse_categorical_numeric(row.get('Provider PAF ID')),
-            uprn_id=self.parse_categorical_numeric(row.get('Provider UPRN ID')),
-            local_authority=self.clean_value(row.get('Provider Local Authority')),
-            region=self.clean_value(row.get('Provider Region')),
-            nhs_region=self.clean_value(row.get('Provider NHS Region')),
-            latitude=self.parse_decimal(row.get('Provider Latitude')),
-            longitude=self.parse_decimal(row.get('Provider Longitude')),
-            parliamentary_constituency=self.clean_value(row.get('Provider Parliamentary Constituency')),
-            nominated_individual_name=self.clean_value(row.get('Provider Nominated Individual Name')),
-            main_partner_name=self.clean_value(row.get('Provider Main Partner Name'))
+            provider_name=self.parse_string_field(row.get('Provider Name'), preserve_special=False) or f"Provider {provider_id}",
+            provider_hsca_start_date=self.parse_date(row.get('Provider HSCA start date')),
+            provider_companies_house_number=self.parse_string_field(row.get('Provider Companies House Number'), preserve_special=True),
+            provider_charity_number=self.parse_string_field(row.get('Provider Charity Number'), preserve_special=True),
+            provider_type_sector=self.parse_string_field(row.get('Provider Type/Sector'), preserve_special=True),
+            provider_inspection_directorate=self.parse_string_field(row.get('Provider Inspection Directorate'), preserve_special=True),
+            provider_primary_inspection_category=self.clean_value(row.get('Provider Primary Inspection Category')),
+            provider_ownership_type=self.parse_string_field(row.get('Provider Ownership Type'), preserve_special=True),
+            provider_telephone_number=self.parse_telephone(row.get('Provider Telephone Number')),
+            provider_web_address=self.parse_string_field(row.get('Provider Web Address'), preserve_special=True),
+            provider_street_address=self.parse_string_field(row.get('Provider Street Address'), preserve_special=True),
+            provider_address_line_2=self.parse_string_field(row.get('Provider Address Line 2'), preserve_special=True),
+            provider_city=self.parse_string_field(row.get('Provider City'), preserve_special=True),
+            provider_county=self.parse_string_field(row.get('Provider County'), preserve_special=True),
+            provider_postal_code=self.parse_categorical_numeric(row.get('Provider Postal Code')),
+            provider_paf_id=self.parse_categorical_numeric(row.get('Provider PAF ID')),
+            provider_uprn_id=self.parse_categorical_numeric(row.get('Provider UPRN ID')),
+            provider_local_authority=self.parse_string_field(row.get('Provider Local Authority'), preserve_special=True),
+            provider_region=self.parse_string_field(row.get('Provider Region'), preserve_special=True),
+            provider_nhs_region=self.parse_string_field(row.get('Provider NHS Region'), preserve_special=True),
+            provider_latitude=self.parse_decimal_field(row.get('Provider Latitude')),
+            provider_longitude=self.parse_decimal_field(row.get('Provider Longitude')),
+            provider_parliamentary_constituency=self.parse_string_field(row.get('Provider Parliamentary Constituency'), preserve_special=True),
+            provider_nominated_individual_name=self.parse_string_field(row.get('Provider Nominated Individual Name'), preserve_special=True),
+            provider_main_partner_name=self.parse_string_field(row.get('Provider Main Partner Name'), preserve_special=True)
         )
 
         try:
@@ -436,14 +514,16 @@ class CQCDataImporter:
             self.stats["errors"].append(f"Provider {provider_id}: {str(e)}")
             return self.db.query(Provider).filter(Provider.provider_id == provider_id).first()
 
-    def get_or_create_location(self, row: pd.Series, provider: Provider) -> Optional[Location]:
-        """Get existing location or create new one (static data only)"""
-        location_id = self.clean_value(row.get('Location ID'))
+    def get_or_create_location_by_original_id(self, row: pd.Series, provider: Provider) -> Optional[Location]:
+        """Get existing location by original ID or create new one (static data only)"""
+        location_id = self.parse_primary_key(row.get('Location ID'), 'Location ID')
         if not location_id:
             return None
 
         # Check if location already exists
-        existing_location = self.db.query(Location).filter(Location.location_id == location_id).first()
+        existing_location = self.db.query(Location).filter(
+            Location.location_id == location_id
+        ).first()
         if existing_location:
             return existing_location
 
@@ -451,33 +531,33 @@ class CQCDataImporter:
         location = Location(
             location_id=location_id,
             provider_id=provider.provider_id,
-            location_name=self.clean_value(row.get('Location Name')) or f"Location {location_id}",
+            location_name=self.parse_string_field(row.get('Location Name'), preserve_special=False) or f"Location {location_id}",
             location_hsca_start_date=self.parse_date(row.get('Location HSCA start date')),
             location_ods_code=self.parse_categorical_numeric(row.get('Location ODS Code')),
             location_telephone_number=self.parse_telephone(row.get('Location Telephone Number')),
-            location_web_address=self.clean_value(row.get('Location Web Address')),
-            location_type_sector=self.clean_value(row.get('Location Type/Sector')),
-            location_inspection_directorate=self.clean_value(row.get('Location Inspection Directorate')),
-            location_primary_inspection_category=self.clean_value(row.get('Location Primary Inspection Category')),
-            location_region=self.clean_value(row.get('Location Region')),
-            location_nhs_region=self.clean_value(row.get('Location NHS Region')),
-            location_local_authority=self.clean_value(row.get('Location Local Authority')),
+            location_web_address=self.parse_string_field(row.get('Location Web Address'), preserve_special=True),
+            location_type_sector=self.parse_string_field(row.get('Location Type/Sector'), preserve_special=True),
+            location_inspection_directorate=self.parse_string_field(row.get('Location Inspection Directorate'), preserve_special=True),
+            location_primary_inspection_category=self.parse_string_field(row.get('Location Primary Inspection Category'), preserve_special=True),
+            location_region=self.parse_string_field(row.get('Location Region'), preserve_special=True),
+            location_nhs_region=self.parse_string_field(row.get('Location NHS Region'), preserve_special=True),
+            location_local_authority=self.parse_string_field(row.get('Location Local Authority'), preserve_special=True),
             location_onspd_ccg_code=self.parse_categorical_numeric(row.get('Location ONSPD CCG Code')),
             location_onspd_ccg=self.clean_value(row.get('Location ONSPD CCG')),
             location_commissioning_ccg_code=self.parse_categorical_numeric(row.get('Location Commissioning CCG Code')),
             location_commissioning_ccg=self.clean_value(row.get('Location Commissioning CCG')),
             location_street_address=self.clean_value(row.get('Location Street Address')),
-            location_address_line_2=self.clean_value(row.get('Location Address Line 2')),
-            location_city=self.clean_value(row.get('Location City')),
-            location_county=self.clean_value(row.get('Location County')),
+            location_address_line_2=self.parse_string_field(row.get('Location Address Line 2'), preserve_special=True),
+            location_city=self.parse_string_field(row.get('Location City'), preserve_special=True),
+            location_county=self.parse_string_field(row.get('Location County'), preserve_special=True),
             location_postal_code=self.parse_categorical_numeric(row.get('Location Postal Code')),
             location_paf_id=self.parse_categorical_numeric(row.get('Location PAF ID')),
             location_uprn_id=self.parse_categorical_numeric(row.get('Location UPRN ID')),
-            location_latitude=self.parse_decimal(row.get('Location Latitude')),
-            location_longitude=self.parse_decimal(row.get('Location Longitude')),
-            location_parliamentary_constituency=self.clean_value(row.get('Location Parliamentary Constituency')),
-            location_also_known_as=self.clean_value(row.get('Location Also Known As')),
-            location_specialisms=self.clean_value(row.get('Location Specialisms'))
+            location_latitude=self.parse_decimal_field(row.get('Location Latitude')),
+            location_longitude=self.parse_decimal_field(row.get('Location Longitude')),
+            location_parliamentary_constituency=self.parse_string_field(row.get('Location Parliamentary Constituency'), preserve_special=True),
+            location_also_known_as=self.parse_string_field(row.get('Location Also Known As'), preserve_special=True),
+            location_specialisms=self.parse_string_field(row.get('Location Specialisms'), preserve_special=True)
         )
 
         try:
@@ -506,13 +586,13 @@ class CQCDataImporter:
         period_data = LocationPeriodData(
             location_id=location.location_id,
             period_id=data_period.period_id,
-            is_dormant=self.parse_boolean(row.get('Dormant (Y/N)')),
-            is_care_home=self.parse_boolean(row.get('Care home?')),
-            registered_manager=self.clean_value(row.get('Registered manager')),
-            care_homes_beds=self.parse_number(row.get('Care homes beds')),
-            latest_overall_rating=self.clean_value(row.get('Location Latest Overall Rating')),
+            is_dormant=self.parse_boolean_field(row.get('Dormant (Y/N)')),
+            is_care_home=self.parse_boolean_field(row.get('Care home?')),
+            registered_manager=self.parse_string_field(row.get('Registered manager'), preserve_special=True),
+            care_homes_beds=self.parse_numeric_field(row.get('Care homes beds')),
+            latest_overall_rating=self.parse_string_field(row.get('Location Latest Overall Rating'), preserve_special=True),
             publication_date=self.validate_date(self.parse_date(row.get('Publication Date')), 'publication_date'),
-            is_inherited_rating=self.parse_boolean(row.get('Inherited Rating (Y/N)'))
+            is_inherited_rating=self.parse_boolean_field(row.get('Inherited Rating (Y/N)'))
         )
         
         try:
@@ -528,71 +608,6 @@ class CQCDataImporter:
                 LocationPeriodData.period_id == data_period.period_id
             ).first()
 
-    def add_location_activities(self, location: Location, row: pd.Series):
-        """Add regulated activities for a location"""
-        activity_columns = [col for col in row.index if col.startswith('Regulated activity -')]
-        
-        for col in activity_columns:
-            if self.parse_boolean(row[col]):
-                activity_name = col.replace('Regulated activity - ', '')
-                activity = self.get_or_create_regulated_activity(activity_name)
-                
-                # Check if relationship already exists
-                existing = self.db.query(LocationRegulatedActivity).filter(
-                    LocationRegulatedActivity.location_id == location.location_id,
-                    LocationRegulatedActivity.activity_id == activity.activity_id
-                ).first()
-                
-                if not existing:
-                    location_activity = LocationRegulatedActivity(
-                        location_id=location.location_id,
-                        activity_id=activity.activity_id
-                    )
-                    self.db.add(location_activity)
-
-    def add_location_service_types(self, location: Location, row: pd.Series):
-        """Add service types for a location"""
-        service_columns = [col for col in row.index if col.startswith('Service type -')]
-        
-        for col in service_columns:
-            if self.parse_boolean(row[col]):
-                service_name = col.replace('Service type - ', '')
-                service_type = self.get_or_create_service_type(service_name)
-                
-                # Check if relationship already exists
-                existing = self.db.query(LocationServiceType).filter(
-                    LocationServiceType.location_id == location.location_id,
-                    LocationServiceType.service_type_id == service_type.service_type_id
-                ).first()
-                
-                if not existing:
-                    location_service = LocationServiceType(
-                        location_id=location.location_id,
-                        service_type_id=service_type.service_type_id
-                    )
-                    self.db.add(location_service)
-
-    def add_location_user_bands(self, location: Location, row: pd.Series):
-        """Add service user bands for a location"""
-        band_columns = [col for col in row.index if col.startswith('Service user band -')]
-        
-        for col in band_columns:
-            if self.parse_boolean(row[col]):
-                band_name = col.replace('Service user band - ', '')
-                band = self.get_or_create_service_user_band(band_name)
-                
-                # Check if relationship already exists
-                existing = self.db.query(LocationServiceUserBand).filter(
-                    LocationServiceUserBand.location_id == location.location_id,
-                    LocationServiceUserBand.band_id == band.band_id
-                ).first()
-                
-                if not existing:
-                    location_band = LocationServiceUserBand(
-                        location_id=location.location_id,
-                        band_id=band.band_id
-                    )
-                    self.db.add(location_band)
 
     def create_location_activity_flags(self, location: Location, row: pd.Series, data_period: DataPeriod) -> Optional[LocationActivityFlags]:
         """Create activity flags for a location in a specific period"""
@@ -611,76 +626,76 @@ class CQCDataImporter:
             period_id=data_period.period_id,
             
             # Regulated Activities - Complete mapping
-            accommodation_nursing_personal_care=self.parse_boolean(row.get('Regulated activity - Accommodation for persons who require nursing or personal care')),
-            treatment_disease_disorder_injury=self.parse_boolean(row.get('Regulated activity - Treatment of disease, disorder or injury')),
-            assessment_medical_treatment=self.parse_boolean(row.get('Regulated activity - Assessment or medical treatment for persons detained under the Mental Health Act 1983')),
-            surgical_procedures=self.parse_boolean(row.get('Regulated activity - Surgical procedures')),
-            diagnostic_screening=self.parse_boolean(row.get('Regulated activity - Diagnostic and screening procedures')),
-            management_supply_blood=self.parse_boolean(row.get('Regulated activity - Management of supply of blood and blood derived products')),
-            transport_services=self.parse_boolean(row.get('Regulated activity - Transport services, triage and medical advice provided remotely')),
-            maternity_midwifery=self.parse_boolean(row.get('Regulated activity - Maternity and midwifery services')),
-            termination_pregnancies=self.parse_boolean(row.get('Regulated activity - Termination of pregnancies')),
-            services_slimming=self.parse_boolean(row.get('Regulated activity - Services in slimming clinics')),
-            nursing_care=self.parse_boolean(row.get('Regulated activity - Nursing care')),
-            personal_care=self.parse_boolean(row.get('Regulated activity - Personal care')),
-            accommodation_persons_detoxification=self.parse_boolean(row.get('Regulated activity - Accommodation for persons who require treatment for substance misuse')),
-            family_planning=self.parse_boolean(row.get('Regulated activity - Family planning')),
+            accommodation_nursing_personal_care=self.parse_boolean_field(row.get('Regulated activity - Accommodation for persons who require nursing or personal care')),
+            treatment_disease_disorder_injury=self.parse_boolean_field(row.get('Regulated activity - Treatment of disease, disorder or injury')),
+            assessment_medical_treatment=self.parse_boolean_field(row.get('Regulated activity - Assessment or medical treatment for persons detained under the Mental Health Act 1983')),
+            surgical_procedures=self.parse_boolean_field(row.get('Regulated activity - Surgical procedures')),
+            diagnostic_screening=self.parse_boolean_field(row.get('Regulated activity - Diagnostic and screening procedures')),
+            management_supply_blood=self.parse_boolean_field(row.get('Regulated activity - Management of supply of blood and blood derived products')),
+            transport_services=self.parse_boolean_field(row.get('Regulated activity - Transport services, triage and medical advice provided remotely')),
+            maternity_midwifery=self.parse_boolean_field(row.get('Regulated activity - Maternity and midwifery services')),
+            termination_pregnancies=self.parse_boolean_field(row.get('Regulated activity - Termination of pregnancies')),
+            services_slimming=self.parse_boolean_field(row.get('Regulated activity - Services in slimming clinics')),
+            nursing_care=self.parse_boolean_field(row.get('Regulated activity - Nursing care')),
+            personal_care=self.parse_boolean_field(row.get('Regulated activity - Personal care')),
+            accommodation_persons_detoxification=self.parse_boolean_field(row.get('Regulated activity - Accommodation for persons who require treatment for substance misuse')),
+            family_planning=self.parse_boolean_field(row.get('Regulated activity - Family planning')),
             
             # Service Types - Complete mapping from CQC data
-            acute_services_with_overnight_beds=self.parse_boolean(row.get('Service type - Acute services with overnight beds')),
-            acute_services_without_overnight_beds=self.parse_boolean(row.get('Service type - Acute services without overnight beds / listed acute services with or without overnight beds')),
-            ambulance_service=self.parse_boolean(row.get('Service type - Ambulance service')),
-            blood_and_transplant_service=self.parse_boolean(row.get('Service type - Blood and Transplant service')),
-            care_home_nursing=self.parse_boolean(row.get('Service type - Care home service with nursing')),
-            care_home_without_nursing=self.parse_boolean(row.get('Service type - Care home service without nursing')),
-            community_based_services_substance_misuse=self.parse_boolean(row.get('Service type - Community based services for people who misuse substances')),
-            community_based_services_learning_disability=self.parse_boolean(row.get('Service type - Community based services for people with a learning disability')),
-            community_based_services_mental_health=self.parse_boolean(row.get('Service type - Community based services for people with mental health needs')),
-            community_health_care_independent_midwives=self.parse_boolean(row.get('Service type - Community health care services - Independent Midwives')),
-            community_health_care_nurses_agency=self.parse_boolean(row.get('Service type - Community health care services - Nurses Agency only')),
-            community_health_care=self.parse_boolean(row.get('Service type - Community healthcare service')),
-            dental_service=self.parse_boolean(row.get('Service type - Dental service')),
-            diagnostic_screening_service=self.parse_boolean(row.get('Service type - Diagnostic and/or screening service')),
-            diagnostic_screening_single_handed_sessional=self.parse_boolean(row.get('Service type - Diagnostic and/or screening service - single handed sessional providers')),
-            doctors_consultation=self.parse_boolean(row.get('Service type - Doctors consultation service')),
-            doctors_treatment=self.parse_boolean(row.get('Service type - Doctors treatment service')),
-            domiciliary_care=self.parse_boolean(row.get('Service type - Domiciliary care service')),
-            extra_care_housing=self.parse_boolean(row.get('Service type - Extra Care housing services')),
-            hospice_services=self.parse_boolean(row.get('Service type - Hospice services')),
-            hospice_services_at_home=self.parse_boolean(row.get('Service type - Hospice services at home')),
-            hospital_services_mental_health_learning_disabilities=self.parse_boolean(row.get('Service type - Hospital services for people with mental health needs, learning disabilities and problems with substance misuse')),
-            hospital_services_acute=self.parse_boolean(row.get('Service type - Hospital services for people detained under the Mental Health Act')),
-            hyperbaric_chamber=self.parse_boolean(row.get('Service type - Hyperbaric Chamber')),
-            long_term_conditions=self.parse_boolean(row.get('Service type - Long term conditions services')),
-            mobile_doctors=self.parse_boolean(row.get('Service type - Mobile doctors service')),
-            prison_healthcare=self.parse_boolean(row.get('Service type - Prison Healthcare Services')),
-            rehabilitation_services=self.parse_boolean(row.get('Service type - Rehabilitation services')),
-            remote_clinical_advice=self.parse_boolean(row.get('Service type - Remote clinical advice service')),
-            residential_substance_misuse_treatment=self.parse_boolean(row.get('Service type - Residential substance misuse treatment and/or rehabilitation service')),
-            shared_lives=self.parse_boolean(row.get('Service type - Shared Lives')),
-            specialist_college=self.parse_boolean(row.get('Service type - Specialist college service')),
-            supported_living=self.parse_boolean(row.get('Service type - Supported living service')),
-            urgent_care=self.parse_boolean(row.get('Service type - Urgent care services')),
+            acute_services_with_overnight_beds=self.parse_boolean_field(row.get('Service type - Acute services with overnight beds')),
+            acute_services_without_overnight_beds=self.parse_boolean_field(row.get('Service type - Acute services without overnight beds / listed acute services with or without overnight beds')),
+            ambulance_service=self.parse_boolean_field(row.get('Service type - Ambulance service')),
+            blood_and_transplant_service=self.parse_boolean_field(row.get('Service type - Blood and Transplant service')),
+            care_home_nursing=self.parse_boolean_field(row.get('Service type - Care home service with nursing')),
+            care_home_without_nursing=self.parse_boolean_field(row.get('Service type - Care home service without nursing')),
+            community_based_services_substance_misuse=self.parse_boolean_field(row.get('Service type - Community based services for people who misuse substances')),
+            community_based_services_learning_disability=self.parse_boolean_field(row.get('Service type - Community based services for people with a learning disability')),
+            community_based_services_mental_health=self.parse_boolean_field(row.get('Service type - Community based services for people with mental health needs')),
+            community_health_care_independent_midwives=self.parse_boolean_field(row.get('Service type - Community health care services - Independent Midwives')),
+            community_health_care_nurses_agency=self.parse_boolean_field(row.get('Service type - Community health care services - Nurses Agency only')),
+            community_health_care=self.parse_boolean_field(row.get('Service type - Community healthcare service')),
+            dental_service=self.parse_boolean_field(row.get('Service type - Dental service')),
+            diagnostic_screening_service=self.parse_boolean_field(row.get('Service type - Diagnostic and/or screening service')),
+            diagnostic_screening_single_handed_sessional=self.parse_boolean_field(row.get('Service type - Diagnostic and/or screening service - single handed sessional providers')),
+            doctors_consultation=self.parse_boolean_field(row.get('Service type - Doctors consultation service')),
+            doctors_treatment=self.parse_boolean_field(row.get('Service type - Doctors treatment service')),
+            domiciliary_care=self.parse_boolean_field(row.get('Service type - Domiciliary care service')),
+            extra_care_housing=self.parse_boolean_field(row.get('Service type - Extra Care housing services')),
+            hospice_services=self.parse_boolean_field(row.get('Service type - Hospice services')),
+            hospice_services_at_home=self.parse_boolean_field(row.get('Service type - Hospice services at home')),
+            hospital_services_mental_health_learning_disabilities=self.parse_boolean_field(row.get('Service type - Hospital services for people with mental health needs, learning disabilities and problems with substance misuse')),
+            hospital_services_acute=self.parse_boolean_field(row.get('Service type - Hospital services for people detained under the Mental Health Act')),
+            hyperbaric_chamber=self.parse_boolean_field(row.get('Service type - Hyperbaric Chamber')),
+            long_term_conditions=self.parse_boolean_field(row.get('Service type - Long term conditions services')),
+            mobile_doctors=self.parse_boolean_field(row.get('Service type - Mobile doctors service')),
+            prison_healthcare=self.parse_boolean_field(row.get('Service type - Prison Healthcare Services')),
+            rehabilitation_services=self.parse_boolean_field(row.get('Service type - Rehabilitation services')),
+            remote_clinical_advice=self.parse_boolean_field(row.get('Service type - Remote clinical advice service')),
+            residential_substance_misuse_treatment=self.parse_boolean_field(row.get('Service type - Residential substance misuse treatment and/or rehabilitation service')),
+            shared_lives=self.parse_boolean_field(row.get('Service type - Shared Lives')),
+            specialist_college=self.parse_boolean_field(row.get('Service type - Specialist college service')),
+            supported_living=self.parse_boolean_field(row.get('Service type - Supported living service')),
+            urgent_care=self.parse_boolean_field(row.get('Service type - Urgent care services')),
             
             # Service User Bands - Complete mapping from CQC data
-            children_0_18_years=self.parse_boolean(row.get('Service user band - Children 0-18 years')),
-            dementia=self.parse_boolean(row.get('Service user band - Dementia')),
-            learning_disabilities_autistic=self.parse_boolean(row.get('Service user band - Learning disabilities or autistic spectrum disorder')),
-            mental_health_needs=self.parse_boolean(row.get('Service user band - Mental Health')),
-            older_people_65_plus=self.parse_boolean(row.get('Service user band - Older People')),
-            people_detained_mental_health_act=self.parse_boolean(row.get('Service user band - People detained under the Mental Health Act')),
-            people_who_misuse_drugs_alcohol=self.parse_boolean(row.get('Service user band - People who misuse drugs and alcohol')),
-            people_with_eating_disorder=self.parse_boolean(row.get('Service user band - People with an eating disorder')),
-            physical_disability=self.parse_boolean(row.get('Service user band - Physical Disability')),
-            sensory_impairment=self.parse_boolean(row.get('Service user band - Sensory Impairment')),
-            whole_population=self.parse_boolean(row.get('Service user band - Whole Population')),
-            younger_adults=self.parse_boolean(row.get('Service user band - Younger Adults')),
+            children_0_18_years=self.parse_boolean_field(row.get('Service user band - Children 0-18 years')),
+            dementia=self.parse_boolean_field(row.get('Service user band - Dementia')),
+            learning_disabilities_autistic=self.parse_boolean_field(row.get('Service user band - Learning disabilities or autistic spectrum disorder')),
+            mental_health_needs=self.parse_boolean_field(row.get('Service user band - Mental Health')),
+            older_people_65_plus=self.parse_boolean_field(row.get('Service user band - Older People')),
+            people_detained_mental_health_act=self.parse_boolean_field(row.get('Service user band - People detained under the Mental Health Act')),
+            people_who_misuse_drugs_alcohol=self.parse_boolean_field(row.get('Service user band - People who misuse drugs and alcohol')),
+            people_with_eating_disorder=self.parse_boolean_field(row.get('Service user band - People with an eating disorder')),
+            physical_disability=self.parse_boolean_field(row.get('Service user band - Physical Disability')),
+            sensory_impairment=self.parse_boolean_field(row.get('Service user band - Sensory Impairment')),
+            whole_population=self.parse_boolean_field(row.get('Service user band - Whole Population')),
+            younger_adults=self.parse_boolean_field(row.get('Service user band - Younger Adults')),
             
             # Legacy backward compatibility fields
             children_0_3_years=False,  # Map to children_0_18_years for compatibility
             children_4_12_years=False,  # Map to children_0_18_years for compatibility  
             children_13_18_years=False,  # Map to children_0_18_years for compatibility
-            adults_18_65_years=self.parse_boolean(row.get('Service user band - Younger Adults')),  # Map to younger_adults
+            adults_18_65_years=self.parse_boolean_field(row.get('Service user band - Younger Adults')),  # Map to younger_adults
         )
         
         try:
@@ -694,6 +709,43 @@ class CQCDataImporter:
             return self.db.query(LocationActivityFlags).filter(
                 LocationActivityFlags.location_id == location.location_id,
                 LocationActivityFlags.period_id == data_period.period_id
+            ).first()
+
+    def create_provider_brand_relationship(self, provider: Provider, brand: Brand, data_period: DataPeriod) -> Optional[ProviderBrand]:
+        """Create provider-brand relationship for a specific period"""
+        if not brand:
+            # No brand for this provider in this period
+            return None
+            
+        # Check if relationship already exists for this period
+        existing_relationship = self.db.query(ProviderBrand).filter(
+            ProviderBrand.provider_id == provider.provider_id,
+            ProviderBrand.brand_id == brand.brand_id,
+            ProviderBrand.period_id == data_period.period_id
+        ).first()
+        
+        if existing_relationship:
+            return existing_relationship
+        
+        # Create new provider-brand relationship
+        provider_brand = ProviderBrand(
+            provider_id=provider.provider_id,
+            brand_id=brand.brand_id,
+            period_id=data_period.period_id
+        )
+        
+        try:
+            self.db.add(provider_brand)
+            self.db.commit()
+            logger.info(f"Created provider-brand relationship: {provider.provider_name} -> {brand.brand_name} for period {data_period.year}-{data_period.month}")
+            return provider_brand
+        except IntegrityError as e:
+            self.db.rollback()
+            logger.warning(f"Provider-brand relationship {provider.provider_id}-{brand.brand_id}-{data_period.period_id}: {str(e)}")
+            return self.db.query(ProviderBrand).filter(
+                ProviderBrand.provider_id == provider.provider_id,
+                ProviderBrand.brand_id == brand.brand_id,
+                ProviderBrand.period_id == data_period.period_id
             ).first()
 
     def import_from_excel(self, excel_path: str, filter_care_homes: bool = None, year: int = None, month: int = None) -> Dict:
@@ -717,6 +769,9 @@ class CQCDataImporter:
             df = pd.read_excel(excel_path, sheet_name='HSCA_Active_Locations')
             logger.info(f"Loaded {len(df)} records from Excel")
             
+            # Scan headers and populate lookup tables dynamically
+            lookup_mappings = self.scan_and_populate_lookup_tables(df)
+            
             # Filter for care homes if requested
             if filter_care_homes is not None:
                 if filter_care_homes:
@@ -730,12 +785,20 @@ class CQCDataImporter:
             for index, row in df.iterrows():
                 try:
                     # Create provider first
-                    provider = self.create_provider(row)
+                    provider = self.get_or_create_provider_by_original_id(row)
                     if not provider:
                         continue
                     
+                    # Create provider-brand relationship for this period
+                    brand_id = self.parse_primary_key(row.get('Brand ID'), 'Brand ID')
+                    brand_name = self.parse_string_field(row.get('Brand Name'), preserve_special=False)
+                    brand = None
+                    if brand_id and brand_id != '-':
+                        brand = self.get_or_create_brand(brand_id, brand_name)
+                    self.create_provider_brand_relationship(provider, brand, data_period)
+                    
                     # Get or create location (static data)
-                    location = self.get_or_create_location(row, provider)
+                    location = self.get_or_create_location_by_original_id(row, provider)
                     if not location:
                         continue
                     
@@ -744,13 +807,11 @@ class CQCDataImporter:
                     if not period_data:
                         continue
                     
-                    # Create activity flags for this period
+                    # Create activity flags for this period (keep for reconstruction compatibility)
                     activity_flags = self.create_location_activity_flags(location, row, data_period)
                     
-                    # Add activities, service types, and user bands (for backward compatibility)
-                    self.add_location_activities(location, row)
-                    self.add_location_service_types(location, row)
-                    self.add_location_user_bands(location, row)
+                    # Create dynamic associations based on discovered columns
+                    self.create_dynamic_associations(location, row, data_period, lookup_mappings)
                     
                     # Commit the relationships
                     self.db.commit()
@@ -848,7 +909,7 @@ class CQCDataImporter:
             for index, row in df_dual.iterrows():
                 try:
                     # Extract dual registration data from the sheet
-                    location_id = self.clean_value(row.get('Location ID'))
+                    location_id = self.parse_primary_key(row.get('Location ID'), 'Location ID')
                     linked_organisation_id = self.clean_value(row.get('Linked Organisation ID'))
                     relationship_type = self.clean_value(row.get('Relationship'))
                     relationship_start_date = self.parse_date(row.get('Relationship Start Date'))
@@ -878,20 +939,18 @@ class CQCDataImporter:
                         
                         # Create dual registration records (bidirectional)
                         dual_reg_1 = DualRegistration(
-                            location_id=location_id,
-                            linked_organisation_id=linked_organisation_id,
-                            year=data_period.year,
-                            month=data_period.month,
+                            location_id=location1.location_id,
+                            linked_organisation_id=location2.location_id,
+                            period_id=data_period.period_id,
                             relationship_type=relationship_type,
                             relationship_start_date=relationship_start_date,
                             is_primary=is_location_primary
                         )
                         
                         dual_reg_2 = DualRegistration(
-                            location_id=linked_organisation_id,
-                            linked_organisation_id=location_id,
-                            year=data_period.year,
-                            month=data_period.month,
+                            location_id=location2.location_id,
+                            linked_organisation_id=location1.location_id,
+                            period_id=data_period.period_id,
                             relationship_type=relationship_type,
                             relationship_start_date=relationship_start_date,
                             is_primary=is_linked_primary
@@ -899,17 +958,15 @@ class CQCDataImporter:
                         
                         # Check if these dual registrations already exist for this period
                         existing_1 = self.db.query(DualRegistration).filter(
-                            DualRegistration.location_id == location_id,
-                            DualRegistration.linked_organisation_id == linked_organisation_id,
-                            DualRegistration.year == data_period.year,
-                            DualRegistration.month == data_period.month
+                            DualRegistration.location_id == location1.location_id,
+                            DualRegistration.linked_organisation_id == location2.location_id,
+                            DualRegistration.period_id == data_period.period_id
                         ).first()
                         
                         existing_2 = self.db.query(DualRegistration).filter(
-                            DualRegistration.location_id == linked_organisation_id,
-                            DualRegistration.linked_organisation_id == location_id,
-                            DualRegistration.year == data_period.year,
-                            DualRegistration.month == data_period.month
+                            DualRegistration.location_id == location2.location_id,
+                            DualRegistration.linked_organisation_id == location1.location_id,
+                            DualRegistration.period_id == data_period.period_id
                         ).first()
                         
                         if not existing_1:
@@ -923,9 +980,9 @@ class CQCDataImporter:
                         logger.info(f"✓ Created dual registrations ({relationship_type}): '{location1.location_name}' ({location1.location_id}) <-> '{location2.location_name}' ({location2.location_id}) for {data_period.year}-{data_period.month:02d}")
                     else:
                         if not location1:
-                            logger.debug(f"Could not find location with ID: {location_id}")
+                            logger.debug(f"Could not find location with original ID: {location_id}")
                         if not location2:
-                            logger.debug(f"Could not find location with ID: {linked_organisation_id}")
+                            logger.debug(f"Could not find location with original ID: {linked_organisation_id}")
                         
                 except Exception as e:
                     logger.warning(f"Failed to process dual registration row {index}: {str(e)}")
@@ -980,6 +1037,9 @@ class CQCDataImporter:
             df_main = pd.read_parquet(main_parquet_path)
             logger.info(f"✅ Loaded {len(df_main)} records from main Parquet file")
             logger.info(f"📋 Columns available: {len(df_main.columns)} columns")
+            
+            # Scan headers and populate lookup tables dynamically
+            lookup_mappings = self.scan_and_populate_lookup_tables(df_main)
             
             # Load dual registration Parquet file and create lookup
             logger.info("🔗 Step 2: Loading dual registration data from Parquet file...")
@@ -1038,15 +1098,23 @@ class CQCDataImporter:
                         logger.info(f"   📝 Processing record {current_record}/{len(df_main)} ({progress_pct:.1f}%)")
                     
                     # Create provider first
-                    provider_id = self.clean_value(row.get('Provider ID'))
+                    provider_id = self.parse_primary_key(row.get('Provider ID'), 'Provider ID')
                     if current_record <= 10:  # Log details for first 10 records
                         logger.info(f"      🏢 Processing provider: {provider_id}")
                     
-                    provider = self.create_provider(row)
+                    provider = self.get_or_create_provider_by_original_id(row)
                     if not provider:
                         if current_record <= 10:
                             logger.warning(f"      ⚠️  Skipped record {current_record}: no provider created")
                         continue
+                    
+                    # Create provider-brand relationship for this period
+                    brand_id = self.parse_primary_key(row.get('Brand ID'), 'Brand ID')
+                    brand_name = self.parse_string_field(row.get('Brand Name'), preserve_special=False)
+                    brand = None
+                    if brand_id and brand_id != '-':
+                        brand = self.get_or_create_brand(brand_id, brand_name)
+                    self.create_provider_brand_relationship(provider, brand, data_period)
                     
                     # Track if this is a new provider
                     if provider_id not in getattr(self, '_seen_providers', set()):
@@ -1056,13 +1124,13 @@ class CQCDataImporter:
                         self._seen_providers.add(provider_id)
                     
                     # Get or create location (static data)
-                    location_id = self.clean_value(row.get('Location ID'))
-                    location_name = self.clean_value(row.get('Location Name'))
+                    location_id = self.parse_primary_key(row.get('Location ID'), 'Location ID')
+                    location_name = self.parse_string_field(row.get('Location Name'), preserve_special=False)
                     
                     if current_record <= 10:
                         logger.info(f"      🏠 Processing location: {location_id} - {location_name}")
                     
-                    location = self.get_or_create_location(row, provider)
+                    location = self.get_or_create_location_by_original_id(row, provider)
                     if not location:
                         if current_record <= 10:
                             logger.warning(f"      ⚠️  Skipped record {current_record}: no location created")
@@ -1082,13 +1150,11 @@ class CQCDataImporter:
                             logger.warning(f"      ⚠️  Skipped record {current_record}: no period data created")
                         continue
                     
-                    # Create activity flags for this period
+                    # Create activity flags for this period (keep for reconstruction compatibility)
                     activity_flags = self.create_location_activity_flags(location, row, data_period)
                     
-                    # Add activities, service types, and user bands (for backward compatibility)
-                    self.add_location_activities(location, row)
-                    self.add_location_service_types(location, row)
-                    self.add_location_user_bands(location, row)
+                    # Create dynamic associations based on discovered columns
+                    self.create_dynamic_associations(location, row, data_period, lookup_mappings)
                     
                     # Note: Dual registration processing moved to separate step after main data processing
                     
@@ -1135,18 +1201,16 @@ class CQCDataImporter:
                                 
                                 # Create dual registration record for current location
                                 existing_dual = self.db.query(DualRegistration).filter(
-                                    DualRegistration.location_id == location_id,
-                                    DualRegistration.linked_organisation_id == linked_organisation_id,
-                                    DualRegistration.year == data_period.year,
-                                    DualRegistration.month == data_period.month
+                                    DualRegistration.location_id == location.location_id,
+                                    DualRegistration.linked_organisation_id == linked_location.location_id,
+                                    DualRegistration.period_id == data_period.period_id
                                 ).first()
                                 
                                 if not existing_dual:
                                     dual_reg = DualRegistration(
-                                        location_id=location_id,
-                                        linked_organisation_id=linked_organisation_id,
-                                        year=data_period.year,
-                                        month=data_period.month,
+                                        location_id=location.location_id,
+                                        linked_organisation_id=linked_location.location_id,
+                                        period_id=data_period.period_id,
                                         relationship_type=relationship_type,
                                         relationship_start_date=dual_info['relationship_start_date'],
                                         is_primary=is_location_primary
@@ -1156,18 +1220,16 @@ class CQCDataImporter:
                                 
                                 # Create reverse dual registration record
                                 existing_dual_reverse = self.db.query(DualRegistration).filter(
-                                    DualRegistration.location_id == linked_organisation_id,
-                                    DualRegistration.linked_organisation_id == location_id,
-                                    DualRegistration.year == data_period.year,
-                                    DualRegistration.month == data_period.month
+                                    DualRegistration.location_id == linked_location.location_id,
+                                    DualRegistration.linked_organisation_id == location.location_id,
+                                    DualRegistration.period_id == data_period.period_id
                                 ).first()
                                 
                                 if not existing_dual_reverse:
                                     dual_reg_reverse = DualRegistration(
-                                        location_id=linked_organisation_id,
-                                        linked_organisation_id=location_id,
-                                        year=data_period.year,
-                                        month=data_period.month,
+                                        location_id=linked_location.location_id,
+                                        linked_organisation_id=location.location_id,
+                                        period_id=data_period.period_id,
                                         relationship_type=relationship_type,
                                         relationship_start_date=dual_info['relationship_start_date'],
                                         is_primary=is_linked_primary
@@ -1180,9 +1242,9 @@ class CQCDataImporter:
                                 logger.info(f"✅ Created dual registration: {location.location_name} ↔ {linked_location.location_name}")
                             else:
                                 if not location:
-                                    logger.warning(f"⚠️  Location not found: {location_id}")
+                                    logger.warning(f"⚠️  Location not found with original ID: {location_id}")
                                 if not linked_location:
-                                    logger.warning(f"⚠️  Linked location not found: {linked_organisation_id}")
+                                    logger.warning(f"⚠️  Linked location not found with original ID: {linked_organisation_id}")
                     except Exception as e:
                         logger.warning(f"❌ Failed to process dual registration for {location_id}: {str(e)}")
                         continue
@@ -1224,3 +1286,156 @@ class CQCDataImporter:
             logger.error(f"Parquet import failed: {str(e)}")
             self.stats["errors"].append(f"Parquet import failed: {str(e)}")
             return self.stats
+
+    def scan_and_populate_lookup_tables(self, df: pd.DataFrame) -> Dict[str, Dict[str, int]]:
+        """
+        Scan CSV/Excel headers and populate lookup tables dynamically
+        Returns mapping of column names to database IDs for each category
+        """
+        logger.info("🔍 Scanning headers and populating lookup tables...")
+        
+        lookup_mappings = {
+            'regulated_activities': {},
+            'service_types': {},
+            'service_user_bands': {}
+        }
+        
+        for column in df.columns:
+            # Check for regulated activity columns
+            if column.startswith('Regulated activity - '):
+                full_name = column  # Store the complete column name
+                activity_id = self.get_or_create_regulated_activity_dynamic(full_name)
+                lookup_mappings['regulated_activities'][column] = activity_id
+                
+            # Check for service type columns  
+            elif column.startswith('Service type - '):
+                full_name = column  # Store the complete column name
+                service_type_id = self.get_or_create_service_type_dynamic(full_name)
+                lookup_mappings['service_types'][column] = service_type_id
+                
+            # Check for service user band columns
+            elif column.startswith('Service user band - '):
+                full_name = column  # Store the complete column name
+                band_id = self.get_or_create_service_user_band_dynamic(full_name)
+                lookup_mappings['service_user_bands'][column] = band_id
+        
+        logger.info(f"✅ Lookup tables populated:")
+        logger.info(f"   - {len(lookup_mappings['regulated_activities'])} regulated activities")
+        logger.info(f"   - {len(lookup_mappings['service_types'])} service types")
+        logger.info(f"   - {len(lookup_mappings['service_user_bands'])} service user bands")
+        
+        return lookup_mappings
+
+    def get_or_create_regulated_activity_dynamic(self, full_column_name: str) -> int:
+        """Get or create a regulated activity with the full column name"""
+        # Check if it already exists
+        existing = self.db.query(RegulatedActivity).filter(
+            RegulatedActivity.activity_name == full_column_name
+        ).first()
+        
+        if existing:
+            return existing.activity_id
+            
+        # Create new activity
+        new_activity = RegulatedActivity(activity_name=full_column_name)
+        self.db.add(new_activity)
+        self.db.commit()
+        
+        logger.info(f"📝 Created regulated activity: {full_column_name}")
+        return new_activity.activity_id
+
+    def get_or_create_service_type_dynamic(self, full_column_name: str) -> int:
+        """Get or create a service type with the full column name"""
+        # Check if it already exists
+        existing = self.db.query(ServiceType).filter(
+            ServiceType.service_type_name == full_column_name
+        ).first()
+        
+        if existing:
+            return existing.service_type_id
+            
+        # Create new service type
+        new_service_type = ServiceType(service_type_name=full_column_name)
+        self.db.add(new_service_type)
+        self.db.commit()
+        
+        logger.info(f"📝 Created service type: {full_column_name}")
+        return new_service_type.service_type_id
+
+    def get_or_create_service_user_band_dynamic(self, full_column_name: str) -> int:
+        """Get or create a service user band with the full column name"""
+        # Check if it already exists
+        existing = self.db.query(ServiceUserBand).filter(
+            ServiceUserBand.band_name == full_column_name
+        ).first()
+        
+        if existing:
+            return existing.band_id
+            
+        # Create new service user band
+        new_band = ServiceUserBand(band_name=full_column_name)
+        self.db.add(new_band)
+        self.db.commit()
+        
+        logger.info(f"📝 Created service user band: {full_column_name}")
+        return new_band.band_id
+
+    def create_dynamic_associations(self, location: Location, row: pd.Series, data_period: DataPeriod, lookup_mappings: Dict[str, Dict[str, int]]):
+        """Create association records only when boolean values are True using dynamic lookups"""
+        
+        # Process regulated activities
+        for column, activity_id in lookup_mappings['regulated_activities'].items():
+            if self.parse_boolean_field(row.get(column)):
+                # Check if association already exists
+                existing = self.db.query(LocationRegulatedActivity).filter(
+                    LocationRegulatedActivity.location_id == location.location_id,
+                    LocationRegulatedActivity.activity_id == activity_id,
+                    LocationRegulatedActivity.period_id == data_period.period_id
+                ).first()
+                
+                if not existing:
+                    association = LocationRegulatedActivity(
+                        location_id=location.location_id,
+                        activity_id=activity_id,
+                        period_id=data_period.period_id
+                    )
+                    self.db.add(association)
+                    self.stats["activities_created"] += 1
+        
+        # Process service types
+        for column, service_type_id in lookup_mappings['service_types'].items():
+            if self.parse_boolean_field(row.get(column)):
+                # Check if association already exists
+                existing = self.db.query(LocationServiceType).filter(
+                    LocationServiceType.location_id == location.location_id,
+                    LocationServiceType.service_type_id == service_type_id,
+                    LocationServiceType.period_id == data_period.period_id
+                ).first()
+                
+                if not existing:
+                    association = LocationServiceType(
+                        location_id=location.location_id,
+                        service_type_id=service_type_id,
+                        period_id=data_period.period_id
+                    )
+                    self.db.add(association)
+                    self.stats["service_types_created"] += 1
+        
+        # Process service user bands
+        for column, band_id in lookup_mappings['service_user_bands'].items():
+            if self.parse_boolean_field(row.get(column)):
+                # Check if association already exists
+                existing = self.db.query(LocationServiceUserBand).filter(
+                    LocationServiceUserBand.location_id == location.location_id,
+                    LocationServiceUserBand.band_id == band_id,
+                    LocationServiceUserBand.period_id == data_period.period_id
+                ).first()
+                
+                if not existing:
+                    association = LocationServiceUserBand(
+                        location_id=location.location_id,
+                        band_id=band_id,
+                        period_id=data_period.period_id
+                    )
+                    self.db.add(association)
+                    self.stats["user_bands_created"] += 1

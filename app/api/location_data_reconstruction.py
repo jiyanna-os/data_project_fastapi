@@ -4,9 +4,74 @@ from sqlalchemy import text
 from typing import Dict, Any, List, Optional
 import logging
 from app.core.database import get_db
+from app.models.regulated_activity import RegulatedActivity
+from app.models.service_type import ServiceType  
+from app.models.service_user_band import ServiceUserBand
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+def reconstruct_boolean_columns(db: Session, location_id: str, period_id: int = None) -> Dict[str, str]:
+    """
+    Dynamically reconstruct all boolean columns from association tables.
+    Returns a dictionary with original column names and Y/N values.
+    """
+    boolean_columns = {}
+    
+    # Get all regulated activities and check which ones this location has
+    activities = db.query(RegulatedActivity).all()
+    for activity in activities:
+        # Query if this location has this activity for the period
+        if period_id:
+            has_activity = db.execute(
+                text("SELECT 1 FROM location_regulated_activities WHERE location_id = :location_id AND activity_id = :activity_id AND period_id = :period_id"),
+                {"location_id": location_id, "activity_id": activity.activity_id, "period_id": period_id}
+            ).fetchone()
+        else:
+            has_activity = db.execute(
+                text("SELECT 1 FROM location_regulated_activities WHERE location_id = :location_id AND activity_id = :activity_id"),
+                {"location_id": location_id, "activity_id": activity.activity_id}
+            ).fetchone()
+        
+        # Store as original column name with Y/N value
+        boolean_columns[activity.activity_name] = "Y" if has_activity else "N"
+    
+    # Get all service types and check which ones this location has
+    service_types = db.query(ServiceType).all()
+    for service_type in service_types:
+        if period_id:
+            has_service = db.execute(
+                text("SELECT 1 FROM location_service_types WHERE location_id = :location_id AND service_type_id = :service_type_id AND period_id = :period_id"),
+                {"location_id": location_id, "service_type_id": service_type.service_type_id, "period_id": period_id}
+            ).fetchone()
+        else:
+            has_service = db.execute(
+                text("SELECT 1 FROM location_service_types WHERE location_id = :location_id AND service_type_id = :service_type_id"),
+                {"location_id": location_id, "service_type_id": service_type.service_type_id}
+            ).fetchone()
+        
+        # Store as original column name with Y/N value
+        boolean_columns[service_type.service_type_name] = "Y" if has_service else "N"
+    
+    # Get all service user bands and check which ones this location has
+    user_bands = db.query(ServiceUserBand).all()
+    for band in user_bands:
+        if period_id:
+            has_band = db.execute(
+                text("SELECT 1 FROM location_service_user_bands WHERE location_id = :location_id AND band_id = :band_id AND period_id = :period_id"),
+                {"location_id": location_id, "band_id": band.band_id, "period_id": period_id}
+            ).fetchone()
+        else:
+            has_band = db.execute(
+                text("SELECT 1 FROM location_service_user_bands WHERE location_id = :location_id AND band_id = :band_id"),
+                {"location_id": location_id, "band_id": band.band_id}
+            ).fetchone()
+        
+        # Store as original column name with Y/N value
+        boolean_columns[band.band_name] = "Y" if has_band else "N"
+    
+    return boolean_columns
 
 
 @router.get("/reconstruct-original/{location_id}")
@@ -141,36 +206,31 @@ def reconstruct_original_data(
         # Convert result to dictionary
         result_dict = result._asdict()
         
-        # Get regulated activities flags for this location/period
-        activity_flags_query = text("""
-            SELECT * FROM location_activity_flags laf
-            JOIN data_periods dp ON laf.period_id = dp.period_id  
-            WHERE laf.location_id = :location_id
-        """)
-        
-        activity_params = {"location_id": location_id}
-        if year is not None:
-            activity_flags_query = text("""
-                SELECT * FROM location_activity_flags laf
-                JOIN data_periods dp ON laf.period_id = dp.period_id  
-                WHERE laf.location_id = :location_id AND dp.year = :year
-            """)
-            activity_params["year"] = year
+        # Get the period_id for dynamic boolean reconstruction
+        period_id = None
+        if year is not None or month is not None:
+            period_query = text("SELECT period_id FROM data_periods WHERE 1=1")
+            period_params = {}
             
-        if month is not None:
-            activity_flags_query = text("""
-                SELECT * FROM location_activity_flags laf
-                JOIN data_periods dp ON laf.period_id = dp.period_id  
-                WHERE laf.location_id = :location_id AND dp.year = :year AND dp.month = :month
-            """)
-            activity_params["month"] = month
+            conditions = []
+            if year is not None:
+                conditions.append("year = :year")
+                period_params["year"] = year
+            if month is not None:
+                conditions.append("month = :month") 
+                period_params["month"] = month
+                
+            if conditions:
+                period_query = text(f"SELECT period_id FROM data_periods WHERE {' AND '.join(conditions)}")
+                period_result = db.execute(period_query, period_params).fetchone()
+                if period_result:
+                    period_id = period_result[0]
         
-        activity_result = db.execute(activity_flags_query, activity_params).fetchone()
+        # Dynamically reconstruct all boolean columns from association tables
+        boolean_columns = reconstruct_boolean_columns(db, location_id, period_id)
         
-        # Add activity flags to result
-        if activity_result:
-            activity_dict = activity_result._asdict()
-            result_dict.update(activity_dict)
+        # Add boolean columns to result
+        result_dict.update(boolean_columns)
         
         return {
             "status": "success",

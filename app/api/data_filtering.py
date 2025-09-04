@@ -6,6 +6,9 @@ from pydantic import BaseModel, Field
 import logging
 import json
 from app.core.database import get_db
+from app.models.regulated_activity import RegulatedActivity
+from app.models.service_type import ServiceType  
+from app.models.service_user_band import ServiceUserBand
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -30,174 +33,144 @@ class FilterRequest(BaseModel):
     order_direction: str = Field(default="ASC", description="Order direction: ASC or DESC")
 
 
-# Define all available columns for filtering
-AVAILABLE_COLUMNS = {
-    # Location identification and basic info
-    "location_id": "l.location_id",
-    "location_hsca_start_date": "l.location_hsca_start_date",
-    "is_dormant": "lpd.is_dormant",
-    "is_care_home": "lpd.is_care_home",
-    "location_name": "l.location_name",
-    "location_ods_code": "l.location_ods_code",
-    "location_telephone_number": "l.location_telephone_number",
-    "registered_manager": "lpd.registered_manager",
-    "care_homes_beds": "lpd.care_homes_beds",
-    "location_type_sector": "l.location_type_sector",
+def get_dynamic_available_columns(db: Session) -> Dict[str, str]:
+    """
+    Dynamically build available columns by querying the database.
+    This ensures we always have the latest column definitions.
+    """
+    # Base static columns (non-boolean)
+    base_columns = {
+        # Location identification and basic info
+        "location_id": "l.location_id",
+        "location_hsca_start_date": "l.location_hsca_start_date",
+        "is_dormant": "lpd.is_dormant",
+        "is_care_home": "lpd.is_care_home",
+        "location_name": "l.location_name",
+        "location_ods_code": "l.location_ods_code",
+        "location_telephone_number": "l.location_telephone_number",
+        "registered_manager": "lpd.registered_manager",
+        "care_homes_beds": "lpd.care_homes_beds",
+        "location_type_sector": "l.location_type_sector",
+        
+        # Inspection and rating
+        "location_inspection_directorate": "l.location_inspection_directorate",
+        "location_primary_inspection_category": "l.location_primary_inspection_category",
+        "latest_overall_rating": "lpd.latest_overall_rating",
+        "publication_date": "lpd.publication_date",
+        "is_inherited_rating": "lpd.is_inherited_rating",
 
-    # Inspection and rating
-    "location_inspection_directorate": "l.location_inspection_directorate",
-    "location_primary_inspection_category": "l.location_primary_inspection_category",
-    "latest_overall_rating": "lpd.latest_overall_rating",
-    "publication_date": "lpd.publication_date",
-    "is_inherited_rating": "lpd.is_inherited_rating",
+        # Geographic information
+        "location_region": "l.location_region",
+        "location_nhs_region": "l.location_nhs_region",
+        "location_local_authority": "l.location_local_authority",
+        "location_onspd_ccg_code": "l.location_onspd_ccg_code",
+        "location_onspd_ccg": "l.location_onspd_ccg",
+        "location_commissioning_ccg_code": "l.location_commissioning_ccg_code",
+        "location_commissioning_ccg": "l.location_commissioning_ccg",
+        "location_street_address": "l.location_street_address",
+        "location_address_line_2": "l.location_address_line_2",
+        "location_city": "l.location_city",
+        "location_county": "l.location_county",
+        "location_postal_code": "l.location_postal_code",
+        "location_paf_id": "l.location_paf_id",
+        "location_uprn_id": "l.location_uprn_id",
+        "location_latitude": "l.location_latitude",
+        "location_longitude": "l.location_longitude",
+        "location_parliamentary_constituency": "l.location_parliamentary_constituency",
+        "location_also_known_as": "l.location_also_known_as",
+        "location_specialisms": "l.location_specialisms",
+        "location_web_address": "l.location_web_address",
 
-    # Location geography and address
-    "location_region": "l.location_region",
-    "location_nhs_region": "l.location_nhs_region",
-    "location_local_authority": "l.location_local_authority",
-    "location_onspd_ccg_code": "l.location_onspd_ccg_code",
-    "location_onspd_ccg": "l.location_onspd_ccg",
-    "location_commissioning_ccg_code": "l.location_commissioning_ccg_code",
-    "location_commissioning_ccg": "l.location_commissioning_ccg",
-    "location_street_address": "l.location_street_address",
-    "location_address_line_2": "l.location_address_line_2",
-    "location_city": "l.location_city",
-    "location_county": "l.location_county",
-    "location_postal_code": "l.location_postal_code",
-    "location_paf_id": "l.location_paf_id",
-    "location_uprn_id": "l.location_uprn_id",
-    "location_latitude": "l.location_latitude",
-    "location_longitude": "l.location_longitude",
-    "location_parliamentary_constituency": "l.location_parliamentary_constituency",
-    "location_also_known_as": "l.location_also_known_as",
-    "location_specialisms": "l.location_specialisms",
-    "location_web_address": "l.location_web_address",
+        # Provider information  
+        "provider_id": "p.provider_id",
+        "provider_name": "p.provider_name",
+        "provider_hsca_start_date": "p.provider_hsca_start_date",
+        "provider_companies_house_number": "p.provider_companies_house_number", 
+        "provider_charity_number": "p.provider_charity_number",
+        "provider_type_sector": "p.provider_type_sector",
+        "provider_inspection_directorate": "p.provider_inspection_directorate",
+        "provider_primary_inspection_category": "p.provider_primary_inspection_category",
+        "provider_ownership_type": "p.provider_ownership_type",
+        "provider_telephone_number": "p.provider_telephone_number",
+        "provider_web_address": "p.provider_web_address",
+        "provider_street_address": "p.provider_street_address",
+        "provider_address_line_2": "p.provider_address_line_2",
+        "provider_city": "p.provider_city",
+        "provider_county": "p.provider_county",
+        "provider_postal_code": "p.provider_postal_code",
+        "provider_paf_id": "p.provider_paf_id",
+        "provider_uprn_id": "p.provider_uprn_id",
+        "provider_local_authority": "p.provider_local_authority",
+        "provider_region": "p.provider_region",
+        "provider_nhs_region": "p.provider_nhs_region",
+        "provider_latitude": "p.provider_latitude",
+        "provider_longitude": "p.provider_longitude",
+        "provider_parliamentary_constituency": "p.provider_parliamentary_constituency",
+        "provider_nominated_individual_name": "p.provider_nominated_individual_name",
+        "provider_main_partner_name": "p.provider_main_partner_name",
 
-    # Provider information
-    "companies_house_number": "p.companies_house_number",
-    "charity_number": "p.charity_number",
-    "brand_id": "p.brand_id",
-    "provider_id": "p.provider_id",
-    "provider_name": "p.provider_name",
-    "provider_hsca_start_date": "p.hsca_start_date",
-    "provider_type_sector": "p.type_sector",
-    "provider_inspection_directorate": "p.inspection_directorate",
-    "provider_primary_inspection_category": "p.primary_inspection_category",
-    "ownership_type": "p.ownership_type",
-    "provider_telephone_number": "p.telephone_number",
-    "provider_web_address": "p.web_address",
-    "provider_street_address": "p.street_address",
-    "provider_address_line_2": "p.address_line_2",
-    "provider_city": "p.city",
-    "provider_county": "p.county",
-    "provider_postal_code": "p.postal_code",
-    "provider_paf_id": "p.paf_id",
-    "provider_uprn_id": "p.uprn_id",
-    "provider_local_authority": "p.local_authority",
-    "provider_region": "p.region",
-    "provider_nhs_region": "p.nhs_region",
-    "provider_latitude": "p.latitude",
-    "provider_longitude": "p.longitude",
-    "provider_parliamentary_constituency": "p.parliamentary_constituency",
-    "nominated_individual_name": "p.nominated_individual_name",
-    "main_partner_name": "p.main_partner_name",
+        # Brand information
+        "brand_name": "b.brand_name",
 
-    # Brand information
-    "brand_name": "b.brand_name",
+        # Period information
+        "year": "dp.year",
+        "month": "dp.month",
+        "file_name": "dp.file_name",
 
-    # Activity flags - Regulated Activities
-    "accommodation_nursing_personal_care": "laf.accommodation_nursing_personal_care",
-    "treatment_disease_disorder_injury": "laf.treatment_disease_disorder_injury",
-    "assessment_medical_treatment": "laf.assessment_medical_treatment",
-    "surgical_procedures": "laf.surgical_procedures",
-    "diagnostic_screening": "laf.diagnostic_screening",
-    "management_supply_blood": "laf.management_supply_blood",
-    "transport_services": "laf.transport_services",
-    "maternity_midwifery": "laf.maternity_midwifery",
-    "termination_pregnancies": "laf.termination_pregnancies",
-    "services_slimming": "laf.services_slimming",
-    "nursing_care": "laf.nursing_care",
-    "personal_care": "laf.personal_care",
-    "accommodation_persons_detoxification": "laf.accommodation_persons_detoxification",
-    "accommodation_persons_past_present_alcohol_dependence": "laf.accommodation_persons_past_present_alcohol_dependence",
-    "family_planning": "laf.family_planning",
-
-    # Service Types - Complete list from CQC data
-    "acute_services_with_overnight_beds": "laf.acute_services_with_overnight_beds",
-    "acute_services_without_overnight_beds": "laf.acute_services_without_overnight_beds",
-    "ambulance_service": "laf.ambulance_service",
-    "blood_and_transplant_service": "laf.blood_and_transplant_service",
-    "care_home_nursing": "laf.care_home_nursing",
-    "care_home_without_nursing": "laf.care_home_without_nursing",
-    "community_based_services_substance_misuse": "laf.community_based_services_substance_misuse",
-    "community_based_services_learning_disability": "laf.community_based_services_learning_disability", 
-    "community_based_services_mental_health": "laf.community_based_services_mental_health",
-    "community_health_care_independent_midwives": "laf.community_health_care_independent_midwives",
-    "community_health_care_nurses_agency": "laf.community_health_care_nurses_agency",
-    "community_health_care": "laf.community_health_care",
-    "dental_service": "laf.dental_service",
-    "diagnostic_screening_service": "laf.diagnostic_screening_service",
-    "diagnostic_screening_single_handed_sessional": "laf.diagnostic_screening_single_handed_sessional",
-    "doctors_consultation": "laf.doctors_consultation",
-    "doctors_treatment": "laf.doctors_treatment", 
-    "domiciliary_care": "laf.domiciliary_care",
-    "extra_care_housing": "laf.extra_care_housing",
-    "hospice_services": "laf.hospice_services",
-    "hospice_services_at_home": "laf.hospice_services_at_home",
-    "hospital_services_mental_health_learning_disabilities": "laf.hospital_services_mental_health_learning_disabilities",
-    "hospital_services_acute": "laf.hospital_services_acute",
-    "hyperbaric_chamber": "laf.hyperbaric_chamber",
-    "long_term_conditions": "laf.long_term_conditions",
-    "mobile_doctors": "laf.mobile_doctors",
-    "prison_healthcare": "laf.prison_healthcare",
-    "rehabilitation_services": "laf.rehabilitation_services",
-    "remote_clinical_advice": "laf.remote_clinical_advice",
-    "residential_substance_misuse_treatment": "laf.residential_substance_misuse_treatment",
-    "shared_lives": "laf.shared_lives",
-    "specialist_college": "laf.specialist_college",
-    "supported_living": "laf.supported_living", 
-    "urgent_care": "laf.urgent_care",
-
-    # Service User Bands - Complete list from CQC data
-    "children_0_18_years": "laf.children_0_18_years",
-    "dementia": "laf.dementia", 
-    "learning_disabilities_autistic": "laf.learning_disabilities_autistic",
-    "mental_health_needs": "laf.mental_health_needs",
-    "older_people_65_plus": "laf.older_people_65_plus",
-    "people_detained_mental_health_act": "laf.people_detained_mental_health_act",
-    "people_who_misuse_drugs_alcohol": "laf.people_who_misuse_drugs_alcohol",
-    "people_with_eating_disorder": "laf.people_with_eating_disorder",
-    "physical_disability": "laf.physical_disability",
-    "sensory_impairment": "laf.sensory_impairment",
-    "whole_population": "laf.whole_population",
-    "younger_adults": "laf.younger_adults",
+        # Dual registration information
+        "is_dual_registered": "CASE WHEN dr.location_id IS NOT NULL THEN true ELSE false END",
+        "dual_linked_organisation_id": "dr.linked_organisation_id",
+        "dual_relationship_type": "dr.relationship_type",
+        "dual_relationship_start_date": "dr.relationship_start_date",
+        "is_primary_in_dual": "dr.is_primary"
+    }
     
-    # Legacy backward compatibility fields
-    "children_0_3_years": "laf.children_0_3_years",
-    "children_4_12_years": "laf.children_4_12_years",
-    "children_13_18_years": "laf.children_13_18_years",
-    "adults_18_65_years": "laf.adults_18_65_years",
+    # Dynamically add regulated activities
+    activities = db.query(RegulatedActivity).all()
+    for activity in activities:
+        # Create a safe column name from the full activity name
+        safe_name = activity.activity_name.lower().replace(' ', '_').replace('-', '_').replace('/', '_').replace('(', '').replace(')', '').replace(',', '').replace('.', '').replace("'", '').replace('"', '')
+        # Use EXISTS subquery to check if location has this activity for the current period
+        base_columns[f"has_activity_{safe_name}"] = f"EXISTS (SELECT 1 FROM location_regulated_activities lra WHERE lra.location_id = l.location_id AND lra.activity_id = {activity.activity_id} AND lra.period_id = lpd.period_id)"
+    
+    # Dynamically add service types
+    service_types = db.query(ServiceType).all()
+    for service_type in service_types:
+        # Create a safe column name from the full service type name
+        safe_name = service_type.service_type_name.lower().replace(' ', '_').replace('-', '_').replace('/', '_').replace('(', '').replace(')', '').replace(',', '').replace('.', '').replace("'", '').replace('"', '')
+        # Use EXISTS subquery to check if location has this service type for the current period
+        base_columns[f"has_service_{safe_name}"] = f"EXISTS (SELECT 1 FROM location_service_types lst WHERE lst.location_id = l.location_id AND lst.service_type_id = {service_type.service_type_id} AND lst.period_id = lpd.period_id)"
+    
+    # Dynamically add service user bands
+    user_bands = db.query(ServiceUserBand).all()
+    for band in user_bands:
+        # Create a safe column name from the full band name
+        safe_name = band.band_name.lower().replace(' ', '_').replace('-', '_').replace('/', '_').replace('(', '').replace(')', '').replace(',', '').replace('.', '').replace("'", '').replace('"', '')
+        # Use EXISTS subquery to check if location has this user band for the current period
+        base_columns[f"has_band_{safe_name}"] = f"EXISTS (SELECT 1 FROM location_service_user_bands lsub WHERE lsub.location_id = l.location_id AND lsub.band_id = {band.band_id} AND lsub.period_id = lpd.period_id)"
+    
+    return base_columns
 
-    # Period information
-    "year": "dp.year",
-    "month": "dp.month",
-    "file_name": "dp.file_name",
 
-    # Dual registration information
-    "is_dual_registered": "CASE WHEN dr.location_id IS NOT NULL THEN true ELSE false END",
-    "dual_linked_organisation_id": "dr.linked_organisation_id",
-    "dual_relationship_type": "dr.relationship_type",
-    "dual_relationship_start_date": "dr.relationship_start_date",
-    "is_primary_in_dual": "dr.is_primary"
-}
+# FILTERING SYSTEM NOW 100% DYNAMIC
+# =====================================
+# All column definitions are dynamically generated from the database via get_dynamic_available_columns().
+# No hardcoded boolean columns or activity mappings. 
+# 
+# Boolean filtering now uses EXISTS subqueries to association tables:
+# - Regulated Activities: has_activity_<name> -> location_regulated_activities table
+# - Service Types: has_service_<name> -> location_service_types table  
+# - Service User Bands: has_band_<name> -> location_service_user_bands table
+#
+# This ensures the system automatically adapts to new CQC data columns without code changes.
 
 
-def build_filter_condition(filter_cond: FilterCondition, params: Dict[str, Any], param_counter: int) -> str:
+def build_filter_condition(filter_cond: FilterCondition, params: Dict[str, Any], param_counter: int, available_columns: Dict[str, str]) -> str:
     """Build a single filter condition for the WHERE clause"""
-    if filter_cond.column not in AVAILABLE_COLUMNS:
+    if filter_cond.column not in available_columns:
         raise HTTPException(status_code=400, detail=f"Column '{filter_cond.column}' not available for filtering")
 
-    column_sql = AVAILABLE_COLUMNS[filter_cond.column]
+    column_sql = available_columns[filter_cond.column]
     param_name = f"param_{param_counter}"
 
     if filter_cond.operator == "equals":
@@ -306,18 +279,10 @@ def filter_cqc_data(
         year: Optional[int] = Query(None, description="Filter by year"),
         month: Optional[int] = Query(None, description="Filter by month"),
 
-        # Boolean service flags (true/false or 1/0)
-        domiciliary_care: Optional[bool] = Query(None, description="Filter locations with domiciliary care"),
-        care_home_nursing: Optional[bool] = Query(None, description="Filter nursing care homes"),
-        care_home_without_nursing: Optional[bool] = Query(None, description="Filter care homes without nursing"),
-        hospital_services_acute: Optional[bool] = Query(None, description="Filter acute hospital services"),
-        community_health_care: Optional[bool] = Query(None, description="Filter community health care"),
-        older_people_65_plus: Optional[bool] = Query(None, description="Filter services for elderly (65+)"),
-        dementia: Optional[bool] = Query(None, description="Filter dementia care services"),
-        mental_health_needs: Optional[bool] = Query(None, description="Filter mental health services"),
-        learning_disabilities_autistic: Optional[bool] = Query(None,
-                                                               description="Filter learning disability/autism services"),
-        physical_disability: Optional[bool] = Query(None, description="Filter physical disability services"),
+        # Dynamic boolean filters - use the format: activity_<safe_name>=true, service_<safe_name>=true, band_<safe_name>=true
+        # Examples: has_activity_accommodation_for_persons_who_require_nursing_or_personal_care=true
+        #          has_service_care_home_service_with_nursing=true
+        #          has_band_older_people=true
 
         # Query parameters
         logic: str = Query("AND", description="Logic operator between conditions: AND or OR"),
@@ -345,6 +310,28 @@ def filter_cqc_data(
     4. Complex JSON filters with field selection:
        GET /filter-data?fields=location_id,location_name&filters=[{"column":"provider_name","value":"Healthcare","operator":"contains"}]
     """
+    
+    try:
+        # Get dynamic columns based on current database state
+        AVAILABLE_COLUMNS = get_dynamic_available_columns(db)
+    except Exception as e:
+        logger.error(f"Error getting dynamic columns: {e}")
+        # Create minimal fallback with only basic non-boolean columns if dynamic fails
+        AVAILABLE_COLUMNS = {
+            # Basic location and provider columns only - no boolean columns as fallback
+            "location_id": "l.location_id",
+            "location_name": "l.location_name", 
+            "location_city": "l.location_city",
+            "location_region": "l.location_region",
+            "provider_id": "p.provider_id",
+            "provider_name": "p.provider_name",
+            "latest_overall_rating": "lpd.latest_overall_rating",
+            "year": "dp.year",
+            "month": "dp.month",
+            "is_care_home": "lpd.is_care_home",
+            "is_dormant": "lpd.is_dormant"
+        }
+        logger.warning("Using minimal fallback columns - boolean filtering disabled")
     try:
         # Build WHERE conditions
         where_conditions = []
@@ -418,27 +405,12 @@ def filter_cqc_data(
             individual_filters.append(
                 FilterCondition(column="care_homes_beds", value=care_homes_beds_max, operator="lte"))
 
-        # Boolean service flags
-        boolean_filters = {
-            "domiciliary_care": domiciliary_care,
-            "care_home_nursing": care_home_nursing,
-            "care_home_without_nursing": care_home_without_nursing,
-            "hospital_services_acute": hospital_services_acute,
-            "community_health_care": community_health_care,
-            "older_people_65_plus": older_people_65_plus,
-            "dementia": dementia,
-            "mental_health_needs": mental_health_needs,
-            "learning_disabilities_autistic": learning_disabilities_autistic,
-            "physical_disability": physical_disability,
-        }
-
-        for column, value in boolean_filters.items():
-            if value is not None:
-                individual_filters.append(FilterCondition(column=column, value=value, operator="equals"))
+        # Dynamic boolean filtering is now handled through the standard filters parameter
+        # Users can filter using column names like: has_activity_accommodation_nursing_personal_care=true
 
         # Process individual filters
         for filter_cond in individual_filters:
-            condition = build_filter_condition(filter_cond, params, param_counter)
+            condition = build_filter_condition(filter_cond, params, param_counter, AVAILABLE_COLUMNS)
             where_conditions.append(condition)
             param_counter += 1
 
@@ -490,9 +462,9 @@ def filter_cqc_data(
             LEFT JOIN location_period_data lpd ON l.location_id = lpd.location_id
             LEFT JOIN data_periods dp ON lpd.period_id = dp.period_id
             LEFT JOIN providers p ON l.provider_id = p.provider_id
-            LEFT JOIN brands b ON p.brand_id = b.brand_id
-            LEFT JOIN location_activity_flags laf ON l.location_id = laf.location_id AND lpd.period_id = laf.period_id
-            LEFT JOIN dual_registrations dr ON l.location_id = dr.location_id AND dp.year = dr.year AND dp.month = dr.month
+            LEFT JOIN provider_brands pb ON p.provider_id = pb.provider_id AND lpd.period_id = pb.period_id
+            LEFT JOIN brands b ON pb.brand_id = b.brand_id
+            LEFT JOIN dual_registrations dr ON l.location_id = dr.location_id AND lpd.period_id = dr.period_id
             WHERE {where_clause}
             {order_clause}
             LIMIT :limit OFFSET :offset
@@ -512,9 +484,9 @@ def filter_cqc_data(
             LEFT JOIN location_period_data lpd ON l.location_id = lpd.location_id
             LEFT JOIN data_periods dp ON lpd.period_id = dp.period_id
             LEFT JOIN providers p ON l.provider_id = p.provider_id
-            LEFT JOIN brands b ON p.brand_id = b.brand_id
-            LEFT JOIN location_activity_flags laf ON l.location_id = laf.location_id AND lpd.period_id = laf.period_id
-            LEFT JOIN dual_registrations dr ON l.location_id = dr.location_id AND dp.year = dr.year AND dp.month = dr.month
+            LEFT JOIN provider_brands pb ON p.provider_id = pb.provider_id AND lpd.period_id = pb.period_id
+            LEFT JOIN brands b ON pb.brand_id = b.brand_id
+            LEFT JOIN dual_registrations dr ON l.location_id = dr.location_id AND lpd.period_id = dr.period_id
             WHERE {where_clause}
         """)
 
@@ -548,31 +520,107 @@ def filter_cqc_data(
 
 
 @router.get("/available-columns")
-def get_available_columns() -> Dict[str, List[str]]:
+def get_available_columns(db: Session = Depends(get_db)) -> Dict[str, Any]:
     """
-    Get list of all available columns for filtering
+    Get list of all available columns for filtering, dynamically generated from database
     """
-    return {
-        "available_columns": list(AVAILABLE_COLUMNS.keys()),
-        "total_columns": len(AVAILABLE_COLUMNS),
-        "categories": {
-            "location_info": [col for col in AVAILABLE_COLUMNS.keys() if col.startswith("location_")],
-            "provider_info": [col for col in AVAILABLE_COLUMNS.keys() if col.startswith("provider_")],
-            "activity_flags": [col for col in AVAILABLE_COLUMNS.keys() if col in [
-                "accommodation_nursing_personal_care", "treatment_disease_disorder_injury",
-                "care_home_nursing", "care_home_without_nursing", "domiciliary_care",
-                "hospital_services_acute", "community_health_care"
-            ]],
-            "user_bands": [col for col in AVAILABLE_COLUMNS.keys() if col in [
-                "older_people_65_plus", "dementia", "learning_disabilities_autistic",
-                "mental_health_needs", "physical_disability", "children_0_3_years",
-                "children_4_12_years", "children_13_18_years", "adults_18_65_years"
-            ]],
-            "general": ["year", "month", "file_name", "brand_name", "is_dormant", "is_care_home", 
-                       "is_dual_registered", "dual_linked_organisation_id", "dual_relationship_type", 
-                       "dual_relationship_start_date", "is_primary_in_dual"]
+    try:
+        # Get dynamic columns from database
+        available_columns = get_dynamic_available_columns(db)
+        
+        return {
+            "available_columns": list(available_columns.keys()),
+            "total_columns": len(available_columns),
+            "categories": {
+                "location_info": [col for col in available_columns.keys() if col.startswith("location_")],
+                "provider_info": [col for col in available_columns.keys() if col.startswith("provider_")],
+                "regulated_activities": [col for col in available_columns.keys() if col.startswith("has_activity_")],
+                "service_types": [col for col in available_columns.keys() if col.startswith("has_service_")],
+                "service_user_bands": [col for col in available_columns.keys() if col.startswith("has_band_")],
+                "period_info": [col for col in available_columns.keys() if col in ["year", "month", "file_name"]],
+                "ratings_and_status": [col for col in available_columns.keys() if col in [
+                    "latest_overall_rating", "publication_date", "is_inherited_rating", 
+                    "is_dormant", "is_care_home", "care_homes_beds"
+                ]],
+                "dual_registrations": [col for col in available_columns.keys() if col.startswith("dual_") or col == "is_dual_registered"],
+                "brands": [col for col in available_columns.keys() if col.startswith("brand_")]
+            },
+            "examples": {
+                "filter_by_activity": "has_activity_accommodation_for_persons_who_require_nursing_or_personal_care=true",
+                "filter_by_service": "has_service_care_home_service_with_nursing=true", 
+                "filter_by_user_band": "has_band_older_people=true",
+                "filter_by_location": "location_city=London",
+                "filter_by_rating": "latest_overall_rating=Outstanding"
+            }
         }
-    }
+    except Exception as e:
+        logger.error(f"Error getting available columns: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get available columns: {str(e)}")
+
+
+@router.get("/boolean-filters")
+def get_available_boolean_filters(db: Session = Depends(get_db)) -> Dict[str, Any]:
+    """
+    Get all available boolean filters with their actual database names and descriptions.
+    This shows what regulated activities, service types, and service user bands are available for filtering.
+    """
+    try:
+        result = {
+            "regulated_activities": [],
+            "service_types": [], 
+            "service_user_bands": [],
+            "usage_examples": []
+        }
+        
+        # Get all regulated activities
+        activities = db.query(RegulatedActivity).all()
+        for activity in activities:
+            safe_name = activity.activity_name.lower().replace(' ', '_').replace('-', '_').replace('/', '_').replace('(', '').replace(')', '').replace(',', '').replace('.', '').replace("'", '').replace('"', '')
+            result["regulated_activities"].append({
+                "full_name": activity.activity_name,
+                "filter_column": f"has_activity_{safe_name}",
+                "example_usage": f"has_activity_{safe_name}=true"
+            })
+        
+        # Get all service types
+        service_types = db.query(ServiceType).all()
+        for service_type in service_types:
+            safe_name = service_type.service_type_name.lower().replace(' ', '_').replace('-', '_').replace('/', '_').replace('(', '').replace(')', '').replace(',', '').replace('.', '').replace("'", '').replace('"', '')
+            result["service_types"].append({
+                "full_name": service_type.service_type_name,
+                "filter_column": f"has_service_{safe_name}",
+                "example_usage": f"has_service_{safe_name}=true"
+            })
+        
+        # Get all service user bands
+        user_bands = db.query(ServiceUserBand).all()
+        for band in user_bands:
+            safe_name = band.band_name.lower().replace(' ', '_').replace('-', '_').replace('/', '_').replace('(', '').replace(')', '').replace(',', '').replace('.', '').replace("'", '').replace('"', '')
+            result["service_user_bands"].append({
+                "full_name": band.band_name,
+                "filter_column": f"has_band_{safe_name}",
+                "example_usage": f"has_band_{safe_name}=true"
+            })
+        
+        # Add usage examples
+        if result["regulated_activities"]:
+            result["usage_examples"].append(f"Filter for nursing care: {result['regulated_activities'][0]['example_usage']}")
+        if result["service_types"]:
+            result["usage_examples"].append(f"Filter for specific services: {result['service_types'][0]['example_usage']}")
+        if result["service_user_bands"]:
+            result["usage_examples"].append(f"Filter for user demographics: {result['service_user_bands'][0]['example_usage']}")
+        
+        result["summary"] = {
+            "total_regulated_activities": len(result["regulated_activities"]),
+            "total_service_types": len(result["service_types"]),
+            "total_service_user_bands": len(result["service_user_bands"])
+        }
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error getting boolean filters: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get boolean filters: {str(e)}")
 
 
 @router.get("/operators")

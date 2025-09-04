@@ -19,8 +19,22 @@ def get_brands(
 
 
 @router.get("/{brand_id}", response_model=Brand)
-def get_brand(brand_id: str, db: Session = Depends(get_db)):
+def get_brand(brand_id: int, db: Session = Depends(get_db)):
     brand = db.query(BrandModel).filter(BrandModel.brand_id == brand_id).first()
+    if not brand:
+        raise HTTPException(status_code=404, detail="Brand not found")
+    return brand
+
+
+@router.get("/original/{original_id}", response_model=Brand)
+def get_brand_by_original_id(
+    original_id: str,
+    db: Session = Depends(get_db)
+):
+    """Get brand by its original string ID from the data source"""
+    brand = db.query(BrandModel).filter(
+        BrandModel.brand_original_id == original_id
+    ).first()
     if not brand:
         raise HTTPException(status_code=404, detail="Brand not found")
     return brand

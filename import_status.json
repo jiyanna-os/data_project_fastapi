@@ -1,45 +1,45 @@
 {
-  "import_id": "import_1756735651",
-  "filename": "01_2025.xlsx",
-  "file_size_mb": 28.73736572265625,
+  "import_id": "import_1756952594",
+  "filename": "08_2025.xlsx",
+  "file_size_mb": 19.109472274780273,
   "file_type": "XLSX",
   "status": "completed",
   "phase": "data_import",
   "progress": 100,
-  "start_time": "2025-09-01T19:37:31.263586",
+  "start_time": "2025-09-04T07:53:14.265162",
   "current_step": "Import completed successfully",
-  "estimated_duration_minutes": 24,
+  "estimated_duration_minutes": 12,
   "phases": {
     "parquet_conversion": {
       "status": "completed",
-      "start_time": "2025-09-01T19:37:31.264242",
-      "duration": 63.907819
+      "start_time": "2025-09-04T07:53:14.266117",
+      "duration": 44.391581
     },
     "data_import": {
       "status": "completed",
-      "start_time": "2025-09-01T19:38:35.172565",
-      "duration": 191.026625
+      "start_time": "2025-09-04T07:53:58.658473",
+      "duration": 494.247382
     }
   },
-  "last_updated": "2025-09-01T19:38:35.172554",
-  "end_time": "2025-09-01T19:41:46.199611",
+  "last_updated": "2025-09-04T07:53:58.658463",
+  "end_time": "2025-09-04T08:02:12.906360",
   "stats": {
-    "brands_created": 1,
-    "providers_created": 15,
-    "locations_created": 40,
-    "location_period_data_created": 14749,
-    "location_activity_flags_created": 14749,
-    "activities_created": 0,
-    "service_types_created": 0,
-    "user_bands_created": 0,
+    "brands_created": 265,
+    "providers_created": 7201,
+    "locations_created": 14731,
+    "location_period_data_created": 14731,
+    "location_activity_flags_created": 14731,
+    "activities_created": 19623,
+    "service_types_created": 15501,
+    "user_bands_created": 48199,
     "periods_created": 1,
     "errors": [],
-    "dual_registrations_processed": 0,
-    "import_time_seconds": 191.01183676719666,
-    "records_per_second": 77.21511006658679,
-    "records_processed": 14749,
-    "providers_processed": 7213,
-    "locations_processed": 14749
+    "dual_registrations_processed": 221,
+    "import_time_seconds": 494.2258095741272,
+    "records_per_second": 29.80621350530774,
+    "records_processed": 14731,
+    "providers_processed": 7201,
+    "locations_processed": 14731
   },
-  "total_duration_seconds": 254.936041
+  "total_duration_seconds": 538.641213
 }

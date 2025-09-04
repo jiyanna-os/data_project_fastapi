@@ -6,8 +6,8 @@ from app.core.database import Base
 class Brand(Base):
     __tablename__ = "brands"
 
-    brand_id = Column(String(10), primary_key=True)
-    brand_name = Column(String(255), nullable=False)
+    brand_id = Column(String, primary_key=True)  # String ID from source data
+    brand_name = Column(String, nullable=False)
 
     # Relationships
-    providers = relationship("Provider", back_populates="brand")
+    provider_affiliations = relationship("ProviderBrand", back_populates="brand")
