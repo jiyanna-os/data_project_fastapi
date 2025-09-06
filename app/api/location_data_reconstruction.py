@@ -120,6 +120,7 @@ def reconstruct_original_data(
                 l.location_ods_code,
                 l.location_telephone_number,
                 lpd.registered_manager,
+                lpd.registered_manager_raw,
                 lpd.care_homes_beds,
                 l.location_type_sector,
                 
@@ -148,8 +149,6 @@ def reconstruct_original_data(
                 l.location_latitude,
                 l.location_longitude,
                 l.location_parliamentary_constituency,
-                l.location_also_known_as,
-                l.location_specialisms,
                 
                 -- Fields 31-40: Provider information
                 p.companies_house_number,
@@ -179,7 +178,9 @@ def reconstruct_original_data(
                 p.longitude as provider_longitude,
                 p.parliamentary_constituency as provider_parliamentary_constituency,
                 p.nominated_individual_name,
-                p.main_partner_name,
+                p.provider_nominated_individual_name_raw,
+                p.provider_main_partner_name,
+                p.provider_main_partner_name_raw,
                 
                 -- Brand information
                 b.brand_name,
@@ -271,6 +272,7 @@ def reconstruct_original_flat_format(
             str(data.get("location_ods_code", "")),
             str(data.get("location_telephone_number", "")),
             str(data.get("registered_manager", "")),
+            str(data.get("registered_manager_raw", "")),
             str(data.get("care_homes_beds", "")),
             str(data.get("location_type_sector", "")),
             str(data.get("location_inspection_directorate", "")),
@@ -295,8 +297,6 @@ def reconstruct_original_flat_format(
             str(data.get("location_latitude", "")),
             str(data.get("location_longitude", "")),
             str(data.get("location_parliamentary_constituency", "")),
-            str(data.get("location_also_known_as", "-")),
-            str(data.get("location_specialisms", "-")),
             str(data.get("companies_house_number", "")),
             str(data.get("brand_id", "")),
             str(data.get("provider_id", "")),
@@ -322,7 +322,9 @@ def reconstruct_original_flat_format(
             str(data.get("provider_longitude", "")),
             str(data.get("provider_parliamentary_constituency", "")),
             str(data.get("nominated_individual_name", "")),
-            str(data.get("main_partner_name", "*")),
+            str(data.get("provider_nominated_individual_name_raw", "")),
+            str(data.get("provider_main_partner_name", "*")),
+            str(data.get("provider_main_partner_name_raw", "")),
             # Activity flags (Y/N values)
             "Y" if data.get("accommodation_nursing_personal_care") else "",
             "Y" if data.get("treatment_disease_disorder_injury") else "",

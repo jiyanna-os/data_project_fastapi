@@ -310,6 +310,42 @@ class CQCDataImporter:
         except Exception as e:
             logger.warning(f"Could not parse string field: {value} - {str(e)}")
             return str(value) if value else None
+    
+    def parse_string_with_raw(self, value) -> Tuple[Optional[str], Optional[str]]:
+        """Parse string fields returning (clean_value, raw_value) tuple.
+        For *, -, returns (None, original) for proper null handling with raw preservation."""
+        if pd.isna(value) or value == '':
+            return None, None
+        
+        try:
+            raw_value = str(value).strip()
+            if not raw_value:
+                return None, None
+            
+            # Store raw value, but return None for main field if * or -
+            if raw_value in ['*', '-']:
+                return None, raw_value
+            
+            # Handle scientific notation from Excel for string fields that might contain numbers
+            clean_value = raw_value
+            if 'e+' in clean_value.lower() or 'e-' in clean_value.lower():
+                try:
+                    float_val = float(clean_value)
+                    if float_val == int(float_val):
+                        clean_value = str(int(float_val))
+                    else:
+                        clean_value = str(float_val)
+                except:
+                    pass  # Keep as string if conversion fails
+            
+            # Remove trailing .0 for string fields that look like numbers
+            if clean_value.endswith('.0') and clean_value[:-2].replace('.', '').replace('-', '').isdigit():
+                clean_value = clean_value[:-2]
+            
+            return clean_value, raw_value
+        except Exception as e:
+            logger.warning(f"Error parsing string field with raw '{value}': {e}")
+            return None, None
 
     def parse_numeric_field(self, value, allow_null_indicators: bool = True) -> Optional[int]:
         """Parse numeric fields - return None for * and - if allow_null_indicators=True"""
@@ -498,8 +534,10 @@ class CQCDataImporter:
             provider_latitude=self.parse_decimal_field(row.get('Provider Latitude')),
             provider_longitude=self.parse_decimal_field(row.get('Provider Longitude')),
             provider_parliamentary_constituency=self.parse_string_field(row.get('Provider Parliamentary Constituency'), preserve_special=True),
-            provider_nominated_individual_name=self.parse_string_field(row.get('Provider Nominated Individual Name'), preserve_special=True),
-            provider_main_partner_name=self.parse_string_field(row.get('Provider Main Partner Name'), preserve_special=True)
+            provider_nominated_individual_name=self.parse_string_with_raw(row.get('Provider Nominated Individual Name'))[0],
+            provider_nominated_individual_name_raw=self.parse_string_with_raw(row.get('Provider Nominated Individual Name'))[1],
+            provider_main_partner_name=self.parse_string_with_raw(row.get('Provider Main Partner Name'))[0],
+            provider_main_partner_name_raw=self.parse_string_with_raw(row.get('Provider Main Partner Name'))[1]
         )
 
         try:
@@ -554,9 +592,7 @@ class CQCDataImporter:
             location_uprn_id=self.parse_categorical_numeric(row.get('Location UPRN ID')),
             location_latitude=self.parse_decimal_field(row.get('Location Latitude')),
             location_longitude=self.parse_decimal_field(row.get('Location Longitude')),
-            location_parliamentary_constituency=self.parse_string_field(row.get('Location Parliamentary Constituency'), preserve_special=True),
-            location_also_known_as=self.parse_string_field(row.get('Location Also Known As'), preserve_special=True),
-            location_specialisms=self.parse_string_field(row.get('Location Specialisms'), preserve_special=True)
+            location_parliamentary_constituency=self.parse_string_field(row.get('Location Parliamentary Constituency'), preserve_special=True)
         )
 
         try:
@@ -587,7 +623,8 @@ class CQCDataImporter:
             period_id=data_period.period_id,
             is_dormant=self.parse_boolean_field(row.get('Dormant (Y/N)')),
             is_care_home=self.parse_boolean_field(row.get('Care home?')),
-            registered_manager=self.parse_string_field(row.get('Registered manager'), preserve_special=True),
+            registered_manager=self.parse_string_with_raw(row.get('Registered manager'))[0],
+            registered_manager_raw=self.parse_string_with_raw(row.get('Registered manager'))[1],
             care_homes_beds=self.parse_numeric_field(row.get('Care homes beds')),
             latest_overall_rating=self.parse_string_field(row.get('Location Latest Overall Rating'), preserve_special=True),
             publication_date=self.validate_date(self.parse_date(row.get('Publication Date')), 'publication_date'),

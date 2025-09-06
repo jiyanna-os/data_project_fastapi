@@ -17,6 +17,7 @@ class LocationPeriodData(Base):
     
     # Management (time-varying)
     registered_manager = Column(String)  # "Registered manager"
+    registered_manager_raw = Column(String)  # Raw value including * and - symbols
     
     # Rating information (time-varying)
     latest_overall_rating = Column(String)  # "Location Latest Overall Rating"

@@ -129,11 +129,11 @@ def get_dynamic_available_columns(db: Session) -> Dict[str, str]:
         if col_name not in base_columns and col_name != 'period_id':
             base_columns[col_name] = f"dp.{col_name}"
     
-    # Get Brand columns (excluding brand_id which is internal)
+    # Get Brand columns (including brand_id)
     brand_columns = inspector.get_columns('brands')
     for col in brand_columns:
         col_name = col['name']
-        if col_name not in base_columns and col_name != 'brand_id':
+        if col_name not in base_columns:
             base_columns[col_name] = f"b.{col_name}"
     
     # Get DualRegistration columns with computed is_dual_registered

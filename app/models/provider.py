@@ -31,7 +31,9 @@ class Provider(Base):
     provider_longitude = Column(DECIMAL)
     provider_parliamentary_constituency = Column(String)
     provider_nominated_individual_name = Column(String)
+    provider_nominated_individual_name_raw = Column(String)  # Raw value including * and - symbols
     provider_main_partner_name = Column(String)
+    provider_main_partner_name_raw = Column(String)  # Raw value including * and - symbols
 
     # Relationships
     brand_affiliations = relationship("ProviderBrand", back_populates="provider")

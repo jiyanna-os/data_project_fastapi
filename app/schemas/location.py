@@ -45,6 +45,7 @@ class LocationPeriodDataBase(BaseModel):
     is_care_home: Optional[bool] = False
     care_homes_beds: Optional[int] = None
     registered_manager: Optional[str] = None
+    registered_manager_raw: Optional[str] = None
     latest_overall_rating: Optional[str] = None
     publication_date: Optional[date] = None
     is_inherited_rating: Optional[bool] = False

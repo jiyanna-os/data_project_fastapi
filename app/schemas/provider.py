@@ -29,7 +29,9 @@ class ProviderBase(BaseModel):
     provider_longitude: Optional[Decimal] = None
     provider_parliamentary_constituency: Optional[str] = None
     provider_nominated_individual_name: Optional[str] = None
+    provider_nominated_individual_name_raw: Optional[str] = None
     provider_main_partner_name: Optional[str] = None
+    provider_main_partner_name_raw: Optional[str] = None
 
 
 class ProviderCreate(ProviderBase):
